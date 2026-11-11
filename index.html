@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anki Pilote</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1d2026; --line: #2e333c; --text: #e6e8ec;
+    --dim: #8b93a1; --accent: #ff7a1a; --ok: #3ecf8e; --bad: #ff5468;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center;
+    padding: 14px 20px; border-bottom: 1px solid var(--line);
+  }
+  h1 { font-size: 17px; margin: 0 8px 0 0; letter-spacing: .04em; text-transform: uppercase; }
+  h1 span { color: var(--accent); }
+  button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 12px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--dim); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #14161a; font-weight: 600; }
+  button.danger { border-color: var(--bad); color: var(--bad); }
+  label.ctl { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13px; }
+  label.ctl output { color: var(--text); font-variant-numeric: tabular-nums; min-width: 4.5em; }
+  input[type=range] { accent-color: var(--accent); width: 130px; }
+  #warn { display: none; margin: 16px 20px; padding: 12px 14px; border: 1px solid var(--bad); border-radius: 6px; color: var(--bad); }
+  main { padding: 20px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  .empty { color: var(--dim); grid-column: 1 / -1; }
+  .car { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+  .car.sel { border-color: var(--accent); }
+  .car.off { opacity: .55; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .row + .row, .row + .strip, .strip + .row, .bar + .row, .row + .bar, .grid + .row, .row + .grid { margin-top: 10px; }
+  .name {
+    flex: 1; min-width: 0; background: transparent; border: 0; border-bottom: 1px solid transparent;
+    color: var(--text); font: 600 15px system-ui, sans-serif; padding: 2px 0;
+  }
+  .name:focus { outline: 0; border-bottom-color: var(--accent); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); flex: none; }
+  .car.on .dot { background: var(--ok); }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .cell { background: var(--bg); border-radius: 5px; padding: 6px 8px; }
+  .cell small { display: block; color: var(--dim); font-size: 11px; }
+  .cell b { font-weight: 500; font-variant-numeric: tabular-nums; }
+  .cell.track { margin-top: 10px; } .cell.track b { font-size: 12px; word-spacing: 2px; }
+  .grid + .grid { margin-top: 6px; }
+  .bar { margin-top: 10px; height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); }
+  .strip { position: relative; height: 22px; background: var(--bg); border-radius: 4px; }
+  .strip::before { content: ""; position: absolute; left: 50%; top: 3px; bottom: 3px; width: 1px; background: var(--line); }
+  .strip .tgt, .strip .pos { position: absolute; top: 4px; width: 14px; height: 14px; margin-left: -7px; border-radius: 3px; left: 50%; }
+  .strip .tgt { border: 1px solid var(--accent); }
+  .strip .pos { background: var(--text); width: 6px; margin-left: -3px; }
+  select, input[type=color] { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 6px; font: inherit; }
+  input[type=color] { padding: 0; width: 34px; height: 30px; }
+  .sp { flex: 1; }
+  body { touch-action: manipulation; }
+  #remote { position: fixed; inset: 0; z-index: 10; background: var(--bg); display: flex; flex-direction: column; gap: 10px; padding: 10px;
+    user-select: none; -webkit-user-select: none; }
+  #remote[hidden] { display: none; }
+  #remote .top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  #remote .top b { font-size: 15px; }
+  #rInfo { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; flex: 1; min-width: 150px; }
+  #remote .zones { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr minmax(96px, 26%); gap: 10px; }
+  .zone { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; touch-action: none; overflow: hidden; }
+  .zone small { position: absolute; left: 10px; top: 8px; color: var(--dim); pointer-events: none; }
+  #rLane::before { content: ""; position: absolute; left: 50%; top: 15%; bottom: 15%; width: 1px; background: var(--line); }
+  #rLaneThumb { position: absolute; top: 20%; bottom: 20%; width: 44px; margin-left: -22px; left: 50%; border-radius: 8px; background: var(--text); pointer-events: none; }
+  #rThrFill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: var(--accent); pointer-events: none; }
+  #rThrVal { position: absolute; left: 0; right: 0; bottom: 10px; text-align: center; font-weight: 600; pointer-events: none; font-variant-numeric: tabular-nums; }
+  #rStop { padding: 12px 22px; font-weight: 700; }
+  #settings { flex-basis: 100%; } #settings summary { color: var(--dim); cursor: pointer; }
+  .set { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding-top: 10px; }
+  .lcol { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  #rLane { flex: 3; }
+  .rbtns { flex: 2; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-height: 64px; }
+  .rbtns button { font-size: 18px; font-weight: 700; touch-action: none; border-radius: 10px; }
+  footer { padding: 0 20px 24px; color: var(--dim); font-size: 13px; }
+  kbd { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font: 12px ui-monospace, Consolas, monospace; color: var(--text); }
+  details { margin-top: 12px; }
+  #log { margin: 8px 0 0; padding: 10px; background: var(--panel); border-radius: 6px; max-height: 220px; overflow: auto; font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Anki <span>Pilote</span></h1>
+  <button class="primary" id="add">+ Ajouter une voiture</button>
+  <button class="danger" id="stopAll">Arrêt général (Échap)</button>
+  <details id="settings"><summary>Réglages</summary><div class="set">
+  <label class="ctl">V max <input type="range" id="vmax" min="300" max="5000" step="50" value="900"><output id="vmaxO"></output></label>
+  <label class="ctl">Accél. <input type="range" id="acc" min="300" max="5000" step="100" value="1500"><output id="accO"></output></label>
+  <label class="ctl">Décél. <input type="range" id="dec" min="200" max="5000" step="100" value="800"><output id="decO"></output></label>
+  <label class="ctl">Frein <input type="range" id="brk" min="500" max="10000" step="250" value="5000"><output id="brkO"></output></label>
+  <label class="ctl">Boost <input type="range" id="boost" min="0" max="200" step="10" value="50"><output id="boostO"></output></label>
+  <label class="ctl">Lignes de départ <select id="nStart"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+  <button id="bots">Lancer les bots</button>
+  <label class="ctl">Virage bots <input type="range" id="botCurve" min="200" max="1500" step="50" value="500"><output id="botCurveO"></output></label>
+  <label class="ctl">Stick G <select id="laneMode"><option value="step">une voie par coup</option><option value="prop">position directe</option></select></label>
+  <span id="pad" style="color:var(--dim);font-size:13px">Manette : aucune (appuyez sur un bouton)</span>
+  </div></details>
+</header>
+
+<div id="warn"></div>
+<main id="cars"><p class="empty">Aucune voiture connectée. Allumez une voiture (hors chargeur), puis « Ajouter une voiture ».</p></main>
+
+<div id="remote" hidden>
+  <div class="top">
+    <b id="rName"></b><span id="rInfo"></span>
+    <label class="ctl"><input type="checkbox" id="rHold"> Maintien vitesse</label>
+    <button id="rUturn">Demi-tour</button>
+    <button class="danger" id="rStop">STOP</button>
+    <button id="rClose">Fermer</button>
+  </div>
+  <div class="zones">
+    <div class="lcol">
+      <div class="zone" id="rLane"><small>Position sur la piste : glisser</small><span id="rLaneThumb"></span></div>
+      <div class="rbtns"><button class="danger" id="rBrake">FREIN</button><button class="primary" id="rBoost">BOOST</button></div>
+    </div>
+    <div class="zone" id="rThr"><small>Gaz</small><i id="rThrFill"></i><span id="rThrVal">0</span></div>
+  </div>
+</div>
+
+<footer>
+  Clavier (voiture sélectionnée) : <kbd>↑</kbd><kbd>↓</kbd> vitesse · <kbd>←</kbd><kbd>→</kbd> voie · <kbd>Espace</kbd> stop · <kbd>U</kbd> demi-tour · <kbd>1</kbd>…<kbd>9</kbd> choisir la voiture · <kbd>Échap</kbd> arrêt général.<br>Manette (une par voiture, choix sur la carte) : <kbd>stick droit ↑</kbd> vitesse · <kbd>stick droit ↓</kbd> ou <kbd>ZL</kbd> frein · <kbd>ZR</kbd> boost · <kbd>stick gauche</kbd> voie · <kbd>L</kbd> demi-tour · <kbd>bouton du bas</kbd> stop.<br>Bots : choisir « Bot facile / moyen / rapide » dans le menu d'une carte, puis « Lancer les bots ».
+  <details><summary>Journal BLE</summary><div id="log"></div></details>
+</footer>
+
+<script>
+'use strict';
+// --- Protocole Anki Drive SDK (protocol.h) ---------------------------------
+const SVC = 'be15beef-6186-407e-8381-0bd89c4d8df4';
+const CH_READ = 'be15bee0-6186-407e-8381-0bd89c4d8df4';   // notifications voiture -> hôte
+const CH_WRITE = 'be15bee1-6186-407e-8381-0bd89c4d8df4';  // commandes hôte -> voiture
+const M = {
+  DISCONNECT: 0x0d, PING_REQ: 0x16, PING_RSP: 0x17, VERSION_REQ: 0x18, VERSION_RSP: 0x19,
+  BATT_REQ: 0x1a, BATT_RSP: 0x1b, SET_SPEED: 0x24, CHANGE_LANE: 0x25, POSITION: 0x27,
+  TRANSITION: 0x29, DELOCALIZED: 0x2b, SET_OFFSET: 0x2c, TURN: 0x32, LIGHTS_PATTERN: 0x33,
+  SDK_MODE: 0x90,
+};
+const HALF_TRACK_MM = 68;      // demi-largeur utile de la piste
+const LANE_STEP_MM = 17;       // pas clavier
+// Identifiants de pièces Overdrive (relevés communautaires, à confirmer sur votre jeu)
+const START_PIECES = [33, 34];   // les deux identifiants portés par la pièce départ/arrivée
+const PIECE_KIND = { 33: 'Dép', 34: 'Arr', 10: 'X', 17: 'V', 18: 'V', 20: 'V', 23: 'V', 24: 'V', 27: 'V', 36: 'D', 39: 'D', 40: 'D', 48: 'D', 51: 'D' };
+// Bots : part de V max en ligne droite, part de « Virage bots » en virage
+const BOT_LEVELS = [
+  { name: 'Bot facile', s: 0.6, c: 0.8 },
+  { name: 'Bot moyen', s: 0.8, c: 0.9 },
+  { name: 'Bot rapide', s: 1.0, c: 1.0 },
+];
+const BOT_LANES = [-51, -17, 17, 51];
+const TICK_MS = 50;           // cadence d'envoi des consignes
+
+// Trame : [taille][id][charge utile], taille = nombre d'octets qui suivent.
+function frame(id, payloadLen) {
+  const v = new DataView(new ArrayBuffer(payloadLen + 2));
+  v.setUint8(0, payloadLen + 1);
+  v.setUint8(1, id);
+  return v;
+}
+const msg = {
+  simple: id => frame(id, 0),
+  sdkMode(on) { const v = frame(M.SDK_MODE, 2); v.setUint8(2, on ? 1 : 0); v.setUint8(3, 0x01); return v; },
+  setSpeed(mmps, accel) {
+    const v = frame(M.SET_SPEED, 5);
+    v.setInt16(2, mmps, true); v.setInt16(4, accel, true); v.setUint8(6, 0);
+    return v;
+  },
+  setOffset(mm) { const v = frame(M.SET_OFFSET, 4); v.setFloat32(2, mm, true); return v; },
+  changeLane(offsetMm, hSpeed = 300, hAccel = 1000) {
+    const v = frame(M.CHANGE_LANE, 10);
+    v.setUint16(2, hSpeed, true); v.setUint16(4, hAccel, true); v.setFloat32(6, offsetMm, true);
+    v.setUint8(10, 0); v.setUint8(11, 0);
+    return v;
+  },
+  uTurn() { const v = frame(M.TURN, 2); v.setUint8(2, 3); v.setUint8(3, 0); return v; },
+  // LED moteur RVB, intensités 0..14, effet fixe. Canaux : 0 rouge, 3 vert, 2 bleu.
+  engineColor(r, g, b) {
+    const v = frame(M.LIGHTS_PATTERN, 16);
+    v.setUint8(2, 3);
+    [[0, r], [3, g], [2, b]].forEach(([ch, val], i) => {
+      const o = 3 + i * 5;
+      v.setUint8(o, ch); v.setUint8(o + 1, 0); v.setUint8(o + 2, val); v.setUint8(o + 3, val); v.setUint8(o + 4, 0);
+    });
+    return v;
+  },
+};
+
+// --- Utilitaires ------------------------------------------------------------
+const $ = s => document.querySelector(s);
+const hex = v => Array.from(new Uint8Array(v.buffer, v.byteOffset, v.byteLength), b => b.toString(16).padStart(2, '0')).join(' ');
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* stockage indisponible */ } },
+};
+const logEl = $('#log');
+function log(who, text) {
+  const line = document.createElement('div');
+  line.textContent = new Date().toLocaleTimeString() + '  ' + who + '  ' + text;
+  logEl.prepend(line);
+  while (logEl.childElementCount > 200) logEl.lastChild.remove();
+}
+
+// --- Voiture ----------------------------------------------------------------
+const cars = [];
+let selected = null;
+
+class Car {
+  constructor(device) {
+    this.device = device;
+    this.label = store.get('anki-label-' + device.id) || 'Voiture ' + (cars.length + 1);
+    this.connected = false;
+    this.invert = false;
+    this.kSpeed = 0; this.kOffset = 0; // consignes clavier
+    this.brake = 0; this.sentBrake = 0; this.boostF = 1;
+    this.bot = null; this.botJit = 1; this.botNext = 0; this.lapSeq = null; this.curPiece = null;
+    this.pad = Math.min(cars.length, 3);   // manette n pour la voiture n par défaut
+    this.ps = { thr: 0, lx: 0, dir: 0, l1: false, r1: false, x: false };
+    this.sentSpeed = 0; this.sentOffset = 0;
+    this.queue = new Map(); this.busy = false; this.seq = 0;
+    this.buildCard();
+    device.addEventListener('gattserverdisconnected', () => this.onDisconnect());
+  }
+
+  buildCard() {
+    const el = document.createElement('section');
+    el.className = 'car';
+    el.innerHTML = `
+      <div class="row"><span class="dot"></span><input class="name" maxlength="24" spellcheck="false">
+        <button data-a="reconnect">Reconnecter</button><button data-a="remove" title="Retirer">✕</button></div>
+      <div class="grid">
+        <div class="cell"><small>Batterie</small><b data-f="batt">–</b></div>
+        <div class="cell"><small>V max mesurée</small><b data-f="vtop">–</b></div>
+        <div class="cell"><small>Pièce / pos.</small><b data-f="piece">–</b></div>
+        <div class="cell"><small>Vitesse</small><b data-f="speed">–</b></div>
+      </div>
+      <div class="grid">
+        <div class="cell"><small>Tours</small><b data-f="laps">0</b></div>
+        <div class="cell"><small>Tour en cours</small><b data-f="cur">–</b></div>
+        <div class="cell"><small>Dernier</small><b data-f="last">–</b></div>
+        <div class="cell"><small>Meilleur</small><b data-f="best">–</b></div>
+        
+      </div>
+      <div class="cell track"><small>Tracé relevé (D droite, V virage, X croisement)</small><b data-f="track">en attente d'un passage sur la ligne de départ</b></div>
+      <div class="bar"><i></i></div>
+      <div class="strip"><span class="tgt"></span><span class="pos"></span></div>
+      <div class="row">
+        <button data-a="left" title="Voie à gauche">◀</button><button data-a="slower" title="Moins vite">−</button>
+        <button data-a="faster" title="Plus vite">+</button><button data-a="right" title="Voie à droite">▶</button>
+      </div>
+      <div class="row">
+        <select data-a="pad" title="Manette affectée à cette voiture"></select>
+        <label class="ctl"><input type="checkbox" data-a="invert"> Inverser G/D</label>
+        <span class="sp"></span>
+        <input type="color" data-a="color" value="#ff7a1a" title="LED moteur">
+        <button data-a="remote">Télécommande</button><button data-a="uturn">Demi-tour</button><button data-a="stop">Stop</button>
+      </div>`;
+    this.el = el;
+    this.f = {};
+    el.querySelectorAll('[data-f]').forEach(n => { this.f[n.dataset.f] = n; });
+    this.bar = el.querySelector('.bar i');
+    this.tgt = el.querySelector('.tgt');
+    this.pos = el.querySelector('.pos');
+
+    const name = el.querySelector('.name');
+    name.value = this.label;
+    name.addEventListener('input', () => { this.label = name.value; store.set('anki-label-' + this.device.id, name.value); });
+
+    const on = (a, fn) => el.querySelector('[data-a=' + a + ']').addEventListener('click', fn);
+    const padSel = el.querySelector('[data-a=pad]');
+    ['Sans manette', 'Manette 1', 'Manette 2', 'Manette 3', 'Manette 4'].forEach((t, i) => padSel.add(new Option(t, String(i - 1))));
+    BOT_LEVELS.forEach((l, i) => padSel.add(new Option(l.name, 'b' + i)));
+    padSel.value = String(this.pad);
+    padSel.addEventListener('change', () => {
+      const v = padSel.value;
+      this.kSpeed = 0; this.brake = 0; this.boostF = 1;
+      if (v[0] === 'b') { this.pad = -1; this.bot = BOT_LEVELS[Number(v[1])]; this.botNext = 0; }
+      else { this.pad = Number(v); this.bot = null; }
+    });
+    on('remote', () => openRemote(this));
+    on('left', () => this.nudgeLane(-1)); on('right', () => this.nudgeLane(1));
+    on('slower', () => this.nudgeSpeed(-1)); on('faster', () => this.nudgeSpeed(1));
+    el.querySelector('[data-a=invert]').addEventListener('change', e => { this.invert = e.target.checked; });
+    el.querySelector('[data-a=uturn]').addEventListener('click', () => this.uTurn());
+    el.querySelector('[data-a=stop]').addEventListener('click', () => this.stop());
+    el.querySelector('[data-a=reconnect]').addEventListener('click', () => this.connect().catch(e => log(this.label, 'ERREUR ' + e.message)));
+    el.querySelector('[data-a=remove]').addEventListener('click', () => removeCar(this));
+    el.querySelector('[data-a=color]').addEventListener('change', e => {
+      const n = parseInt(e.target.value.slice(1), 16);
+      const s = c => Math.round(c / 255 * 14);
+      this.send(msg.engineColor(s(n >> 16 & 255), s(n >> 8 & 255), s(n & 255)));
+    });
+    el.addEventListener('pointerdown', () => select(this));
+    $('#cars').appendChild(el);
+    this.refresh();
+  }
+
+  refresh() {
+    this.el.classList.toggle('on', this.connected);
+    this.el.classList.toggle('off', !this.connected);
+    this.el.classList.toggle('sel', selected === this);
+  }
+
+  async connect() {
+    const server = await this.device.gatt.connect();
+    const svc = await server.getPrimaryService(SVC);
+    this.rd = await svc.getCharacteristic(CH_READ);
+    this.wr = await svc.getCharacteristic(CH_WRITE);
+    this.rd.oncharacteristicvaluechanged = e => this.onMessage(e.target.value);
+    await this.rd.startNotifications();
+    this.connected = true;
+    this.sentSpeed = 0; this.sentOffset = 0; this.kSpeed = 0; this.kOffset = 0;
+    this.resetLaps();
+    this.refresh();
+    log(this.label, 'connectée');
+    this.send(msg.sdkMode(true));
+    this.send(msg.setOffset(0));            // référence latérale : la voiture est supposée au centre
+    this.send(msg.simple(M.VERSION_REQ));
+    this.send(msg.simple(M.BATT_REQ));
+  }
+
+  onDisconnect() {
+    if (!this.connected) return;
+    this.connected = false; this.queue.clear(); this.refresh();
+    log(this.label, 'déconnectée');
+  }
+
+  // File d'écriture : une seule opération GATT à la fois ; une consigne de même
+  // clé remplace la précédente encore en attente (pas d'accumulation de retard).
+  send(view, key) {
+    if (!this.connected) return;
+    this.queue.set(key || 'm' + this.seq++, view);
+    this.pump();
+  }
+  async pump() {
+    if (this.busy) return;
+    this.busy = true;
+    while (this.queue.size && this.connected) {
+      const [key, view] = this.queue.entries().next().value;
+      this.queue.delete(key);
+      try {
+        if (this.wr.properties.writeWithoutResponse) await this.wr.writeValueWithoutResponse(view);
+        else await this.wr.writeValueWithResponse(view);
+        if (key !== 'batt') log(this.label, '→ ' + hex(view));
+      } catch (e) { log(this.label, 'ERREUR écriture ' + e.message); }
+    }
+    this.busy = false;
+  }
+
+  onMessage(v) {
+    if (v.byteLength < 2) return;
+    const id = v.getUint8(1);
+    if (id === M.POSITION && v.byteLength >= 10) {
+      const off = v.getFloat32(4, true), spd = v.getUint16(8, true);
+      this.f.piece.textContent = v.getUint8(3) + ' / ' + v.getUint8(2);
+      this.f.speed.textContent = spd + ' mm/s';
+      if (spd > this.vtop) { this.vtop = spd; this.f.vtop.textContent = spd + ' mm/s'; }
+      this.showPos(off);
+      this.onPiece(v.getUint8(3));
+    } else if (id === M.TRANSITION && v.byteLength >= 8) {
+      this.lastPiece = null;   // nouvelle pièce physique, même si l'identifiant se répète
+      this.showPos(v.getFloat32(4, true));
+    } else if (id === M.BATT_RSP && v.byteLength >= 4) {
+      const mv = v.getUint16(2, true);
+      this.f.batt.textContent = (mv / 1000).toFixed(2) + ' V';
+      this.f.batt.style.color = mv < 3600 ? 'var(--bad)' : '';
+      if (mv < 3600 && !this.lowWarned) { this.lowWarned = true; log(this.label, 'BATTERIE FAIBLE ' + mv + ' mV : recharger avant essai'); }
+    } else if (id === M.VERSION_RSP && v.byteLength >= 4) {
+      log(this.label, 'firmware 0x' + v.getUint16(2, true).toString(16));
+    } else if (id === M.DELOCALIZED) {
+      this.f.piece.textContent = 'hors piste';
+      log(this.label, 'délocalisée');
+    } else if (id !== 0x2d && id !== 0x2a && id !== 0x36 && id !== 0x41 && id !== 0x3f) {
+      log(this.label, '← ' + hex(v));
+    }
+  }
+  resetLaps() {
+    this.laps = 0; this.best = null; this.lapStart = null; this.cur = []; this.lastPiece = null; this.vtop = 0;
+    this.lapSeq = null; this.curPiece = null; this.crossings = 0; this.sinceStart = false;
+    this.f.laps.textContent = '0'; this.f.cur.textContent = '–'; this.f.last.textContent = '–'; this.f.best.textContent = '–';
+    this.f.vtop.textContent = '–';
+    this.f.track.textContent = "en attente d'un passage sur la ligne de départ";
+  }
+  onPiece(id) {
+    if (id === this.lastPiece) return;
+    this.lastPiece = id; this.curPiece = id;
+    const now = performance.now();
+    if (!START_PIECES.includes(id)) {
+      this.sinceStart = true;
+    } else if (this.lapStart === null) {
+      this.lapStart = now; this.cur = []; this.crossings = 0; this.sinceStart = false;   // premier passage : départ du chrono
+    } else if (this.sinceStart) {
+      // Nouveau passage sur une ligne de départ (le second identifiant de la même pièce est ignoré).
+      // Un tour complet = autant de passages qu'il y a de lignes de départ sur le circuit.
+      this.sinceStart = false;
+      if (++this.crossings >= Number($('#nStart').value)) {
+        const t = (now - this.lapStart) / 1000;
+        this.laps++;
+        this.best = this.best === null ? t : Math.min(this.best, t);
+        this.f.laps.textContent = this.laps;
+        this.f.last.textContent = t.toFixed(2) + ' s';
+        this.f.best.textContent = this.best.toFixed(2) + ' s';
+        this.f.track.textContent = this.cur.length + ' lectures : ' + this.cur.map(p => PIECE_KIND[p] || '?' + p).join(' ');
+        log(this.label, 'TOUR ' + this.laps + '  ' + t.toFixed(2) + ' s  pièces ' + this.cur.join(','));
+        this.lapSeq = this.cur.slice();               // tracé mémorisé pour l'anticipation des bots
+        this.botJit = 0.95 + Math.random() * 0.1;     // légère variation d'un tour à l'autre
+        this.lapStart = now; this.cur = []; this.crossings = 0;
+      }
+    }
+    if (this.lapStart !== null) this.cur.push(id);
+  }
+  showPos(mm) { this.pos.style.left = (50 + clamp(mm / HALF_TRACK_MM, -1, 1) * 46) + '%'; }
+
+  // Applique les consignes (appelé à cadence fixe). N'émet que sur changement.
+  apply(speed, offset) {
+    speed = Math.round(speed); offset = Math.round(offset);
+    this.bar.style.width = clamp(speed / 5000 * 100, 0, 100) + '%';
+    this.tgt.style.left = (50 + clamp(offset / HALF_TRACK_MM, -1, 1) * 46) + '%';
+    if (!this.connected) { if (this.kSpeed) this.kSpeed = 0; return; }
+    // Rampe envoyée avec la consigne : Accél. si la vitesse monte, Décél. si elle baisse (lâcher des gaz),
+    // et une valeur entre Décél. et Frein, proportionnelle à l'appui, quand le frein est actionné.
+    const b = this.brake || 0;
+    if (b > 0) speed = 0;
+    const speedChanged = speed !== this.sentSpeed && (Math.abs(speed - this.sentSpeed) >= 10 || speed === 0);
+    const brakeChanged = b > 0 && Math.abs(b - this.sentBrake) >= 0.1;
+    if (speedChanged || brakeChanged) {
+      const dec = Number($(this.bot ? '#brk' : '#dec').value);   // un bot freine franchement avant les virages
+      const ramp = speed > this.sentSpeed ? Number($('#acc').value)
+        : b > 0 ? Math.round(dec + b * Math.max(0, Number($('#brk').value) - dec)) : dec;
+      this.sentSpeed = speed; this.sentBrake = b;
+      this.send(msg.setSpeed(speed, ramp), 'speed');
+    }
+    if (b === 0) this.sentBrake = 0;
+    if (Math.abs(offset - this.sentOffset) >= 4) {
+      this.sentOffset = offset;
+      this.send(msg.changeLane(offset), 'lane');
+    }
+  }
+  nudgeSpeed(d) { this.kSpeed = clamp(this.kSpeed + d * 50, 0, Number($('#vmax').value)); }
+  nudgeLane(d) { this.kOffset = clamp(this.kOffset + d * (this.invert ? -1 : 1) * LANE_STEP_MM, -HALF_TRACK_MM, HALF_TRACK_MM); }
+  stop() { if (this.bot) setBots(false); this.kSpeed = 0; this.sentSpeed = 0; this.send(msg.setSpeed(0, Number($('#brk').value)), 'speed'); }
+  uTurn() {
+    this.send(msg.uTurn());
+    // Sens inversé : le tour en cours et le tracé mémorisé ne sont plus valables
+    this.lapStart = null; this.cur = []; this.lapSeq = null; this.f.cur.textContent = '–';
+  }
+  async disconnect() {
+    if (this.connected) {
+      try { await this.wr.writeValueWithoutResponse(msg.simple(M.DISCONNECT)); } catch (e) { /* déjà partie */ }
+    }
+    if (this.device.gatt.connected) this.device.gatt.disconnect();
+  }
+}
+
+function select(car) { selected = car; cars.forEach(c => c.refresh()); }
+function removeCar(car) {
+  car.stop();
+  setTimeout(() => car.disconnect(), 150);
+  car.el.remove();
+  cars.splice(cars.indexOf(car), 1);
+  if (selected === car) selected = cars[0] || null;
+  cars.forEach(c => c.refresh());
+  if (!cars.length) $('#cars').innerHTML = '<p class="empty">Aucune voiture connectée.</p>';
+}
+function stopAll() { setBots(false); cars.forEach(c => c.stop()); }
+
+// --- Ajout d'une voiture ----------------------------------------------------
+$('#add').addEventListener('click', async () => {
+  try {
+    const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SVC] }] });
+    const known = cars.find(c => c.device.id === device.id);
+    if (known) { if (!known.connected) await known.connect(); return; }
+    const empty = $('#cars .empty'); if (empty) empty.remove();
+    const car = new Car(device);
+    cars.push(car);
+    select(car);
+    await car.connect();
+    if (TOUCH) openRemote(car);
+  } catch (e) {
+    if (e.name !== 'NotFoundError') log('BLE', 'ERREUR ' + e.message);
+  }
+});
+$('#stopAll').addEventListener('click', stopAll);
+
+// --- Réglages ---------------------------------------------------------------
+function bindRange(id, unit) {
+  const i = $('#' + id), o = $('#' + id + 'O');
+  const up = () => { o.textContent = i.value + ' ' + unit; };
+  i.addEventListener('input', up); up();
+}
+bindRange('vmax', 'mm/s'); bindRange('acc', 'mm/s²'); bindRange('dec', 'mm/s²'); bindRange('brk', 'mm/s²'); bindRange('boost', '% en plus'); bindRange('botCurve', 'mm/s');
+
+// --- Télécommande tactile ---------------------------------------------------
+const R = { car: null, wake: null };
+function setThr(f) {
+  $('#rThrFill').style.height = (f * 100) + '%';
+  const v = Math.round(f * Number($('#vmax').value));
+  $('#rThrVal').textContent = v + ' mm/s';
+  if (R.car) R.car.kSpeed = v;
+}
+function setLane(f) {
+  $('#rLaneThumb').style.left = (50 + f * 44) + '%';
+  if (R.car) R.car.kOffset = f * HALF_TRACK_MM * (R.car.invert ? -1 : 1);
+}
+async function openRemote(car) {
+  select(car); R.car = car;
+  $('#rName').textContent = car.label;
+  $('#remote').hidden = false;
+  setThr(0); setLane(clamp(car.kOffset / HALF_TRACK_MM, -1, 1) * (car.invert ? -1 : 1));
+  try { if (navigator.wakeLock) R.wake = await navigator.wakeLock.request('screen'); } catch (e) { /* écran non maintenu */ }
+}
+function closeRemote() {
+  if (R.car) { R.car.stop(); R.car.tBrake = 0; R.car.tBoost = false; }
+  R.car = null; $('#remote').hidden = true;
+  if (R.wake) { R.wake.release().catch(() => {}); R.wake = null; }
+}
+function bindZone(el, move, end) {
+  el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); move(e, el.getBoundingClientRect()); e.preventDefault(); });
+  el.addEventListener('pointermove', e => { if (el.hasPointerCapture(e.pointerId)) move(e, el.getBoundingClientRect()); });
+  if (end) ['pointerup', 'pointercancel'].forEach(t => el.addEventListener(t, end));
+}
+bindZone($('#rThr'), (e, r) => setThr(clamp((r.bottom - e.clientY) / r.height, 0, 1)),
+  () => { if (!$('#rHold').checked) setThr(0); });
+bindZone($('#rLane'), (e, r) => setLane(clamp((e.clientX - r.left) / r.width * 2 - 1, -1, 1)));
+$('#rStop').addEventListener('click', () => { setThr(0); if (R.car) R.car.stop(); });
+$('#rUturn').addEventListener('click', () => { if (R.car) R.car.uTurn(); });
+$('#rClose').addEventListener('click', closeRemote);
+function bindHold(el, fn) {
+  el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); fn(true); e.preventDefault(); });
+  ['pointerup', 'pointercancel'].forEach(t => el.addEventListener(t, () => fn(false)));
+  el.addEventListener('contextmenu', e => e.preventDefault());
+}
+bindHold($('#rBrake'), on => { if (R.car) R.car.tBrake = on ? 1 : 0; });
+bindHold($('#rBoost'), on => { if (R.car) R.car.tBoost = on; });
+if (matchMedia('(min-width: 900px)').matches) $('#settings').open = true;
+const TOUCH = matchMedia('(pointer: coarse)').matches;
+$('#rHold').addEventListener('change', e => { if (!e.target.checked) setThr(0); });
+
+// --- Clavier ----------------------------------------------------------------
+addEventListener('keydown', e => {
+  if (e.target.matches('input.name')) return;
+  if (e.key === 'Escape') { stopAll(); return; }
+  const c = selected; if (!c) return;
+  if (e.key >= '1' && e.key <= '9') { const n = cars[Number(e.key) - 1]; if (n) select(n); return; }
+  switch (e.key) {
+    case 'ArrowUp': c.nudgeSpeed(1); break;
+    case 'ArrowDown': c.nudgeSpeed(-1); break;
+    case 'ArrowLeft': c.nudgeLane(-1); break;
+    case 'ArrowRight': c.nudgeLane(1); break;
+    case ' ': c.stop(); break;
+    case 'u': case 'U': c.uTurn(); break;
+    default: return;
+  }
+  e.preventDefault();
+});
+
+// --- Boucle de commande -----------------------------------------------------
+// Manettes (mappage standard), une par voiture (choix sur chaque carte) :
+// stick droit avant = gaz, arrière ou ZL = frein, ZR = boost, stick gauche ou L1/R1 = voie, bouton du bas = stop.
+function readPads(vmax) {
+  const pads = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(g => g && g.connected) : [];
+  const boostF = 1 + Number($('#boost').value) / 100;
+  const prop = $('#laneMode').value === 'prop';
+  const txt = [];
+  pads.forEach((p, n) => {
+    if (p.mapping !== 'standard' || p.buttons.length < 8 || p.axes.length < 4) { txt.push('M' + (n + 1) + ' non standard'); return; }
+    const sy = -p.axes[3];                                   // négatif vers le haut dans l'API
+    const thr = sy > 0.02 ? Math.min(1, (sy - 0.02) / 0.96) : 0;
+    const back = sy < -0.1 ? Math.min(1, (-sy - 0.1) / 0.88) : 0;
+    const brake = Math.max(back, p.buttons[6].value);
+    const boost = p.buttons[7].pressed || p.buttons[7].value > 0.5;
+    const x = p.axes[0];
+    txt.push('M' + (n + 1) + ' gaz ' + Math.round(thr * 100) + ' %' + (boost ? ' +boost' : '') + (brake ? ' frein ' + Math.round(brake * 100) + ' %' : ''));
+    for (const c of cars) {
+      if (c.pad !== n) continue;
+      const st = c.ps;
+      if (Math.abs(thr - st.thr) > 0.005) { st.thr = thr; c.kSpeed = Math.round(thr * vmax); }
+      c.brake = brake; c.boostF = boost ? boostF : 1;
+      if (prop) {
+        const f = Math.abs(x) > 0.08 ? x : 0;
+        if (Math.abs(f - st.lx) > 0.01) { st.lx = f; c.kOffset = f * HALF_TRACK_MM * (c.invert ? -1 : 1); }
+      } else {
+        const d = x > 0.6 ? 1 : x < -0.6 ? -1 : Math.abs(x) < 0.3 ? 0 : st.dir;   // hystérésis : un coup = une voie
+        if (d !== st.dir) { st.dir = d; if (d) c.nudgeLane(d); }
+      }
+      const l1 = p.buttons[4].pressed, r1 = p.buttons[5].pressed, bx = p.buttons[0].pressed, ba = p.buttons[1].pressed;
+      if (l1 && !st.l1) c.uTurn();
+      if (bx && !st.x) c.stop();
+      st.l1 = l1; st.r1 = r1; st.x = bx; st.a = ba;
+    }
+  });
+  // Voitures sans manette : frein et boost viennent des boutons tactiles de la télécommande
+  for (const c of cars) if (c.pad < 0 || c.pad >= pads.length) { c.brake = c.tBrake || 0; c.boostF = c.tBoost ? boostF : 1; }
+  $('#pad').textContent = pads.length ? txt.join(' | ') : 'Manette : aucune (appuyez sur un bouton)';
+}
+// --- Bots --------------------------------------------------------------------
+// Premier tour à vitesse de virage partout (reconnaissance) ; ensuite le bot connaît la suite des pièces :
+// plein régime en ligne droite, freinage une pièce avant chaque virage, changement de voie aléatoire en ligne droite.
+const BOTS = { on: false };
+function setBots(on) {
+  BOTS.on = on;
+  $('#bots').textContent = on ? 'Arrêter les bots' : 'Lancer les bots';
+  $('#bots').classList.toggle('primary', on);
+  if (!on) for (const c of cars) if (c.bot) c.kSpeed = 0;
+}
+$('#bots').addEventListener('click', () => setBots(!BOTS.on));
+function runBots(vmax) {
+  if (!BOTS.on) return;
+  const vCurve = Number($('#botCurve').value), now = performance.now();
+  for (const c of cars) {
+    if (!c.bot || !c.connected) continue;
+    const next = c.lapSeq ? c.lapSeq[c.cur.length % c.lapSeq.length] : null;
+    const curve = !c.lapSeq || PIECE_KIND[c.curPiece] === 'V' || PIECE_KIND[next] === 'V';
+    const vs = c.bot.s * vmax;
+    c.kSpeed = Math.round((curve ? Math.min(vs, vCurve * c.bot.c) : vs) * c.botJit);
+    if (!curve && now > c.botNext) {
+      c.kOffset = BOT_LANES[Math.floor(Math.random() * BOT_LANES.length)];
+      c.botNext = now + 4000 + Math.random() * 6000;
+    }
+  }
+}
+
+setInterval(() => {
+  const vmax = Number($('#vmax').value);
+  readPads(vmax);
+  runBots(vmax);
+  for (const c of cars) c.apply(Math.min(c.kSpeed, vmax) * (c.boostF || 1), c.kOffset);
+  const tNow = performance.now();
+  for (const c of cars) if (c.lapStart != null && c.connected) c.f.cur.textContent = ((tNow - c.lapStart) / 1000).toFixed(1) + ' s';
+  if (R.car) {
+    const f = R.car.f;
+    $('#rInfo').textContent = R.car.connected
+      ? f.speed.textContent + ' · ' + f.batt.textContent + ' · max ' + f.vtop.textContent + ' · tours ' + f.laps.textContent + ' · en cours ' + f.cur.textContent + ' · dernier ' + f.last.textContent + ' · meilleur ' + f.best.textContent
+      : 'DÉCONNECTÉE';
+  }
+}, TICK_MS);
+
+// Sécurité : onglet masqué ou fermé -> arrêt.
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopAll(); });
+addEventListener('pagehide', stopAll);
+
+// Rafraîchissement batterie
+setInterval(() => cars.forEach(c => c.send(msg.simple(M.BATT_REQ), 'batt')), 30000);
+
+if (!navigator.bluetooth) {
+  const w = $('#warn');
+  w.style.display = 'block';
+  w.textContent = 'Web Bluetooth indisponible. Il faut Chrome (PC ou Android) et une page servie en https:// ou depuis localhost.';
+  $('#add').disabled = true;
+}
+</script>
+</body>
+</html>
