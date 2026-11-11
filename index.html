@@ -80,6 +80,7 @@
   #rStop { padding: 12px 22px; font-weight: 700; }
   #settings { flex-basis: 100%; } #settings summary { color: var(--dim); cursor: pointer; }
   .set { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding-top: 10px; }
+  input.sec { width: 4.6em; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font: inherit; }
   .lcol { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
   #rLane { flex: 3; }
   .rbtns { flex: 2; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-height: 64px; }
@@ -108,6 +109,11 @@
   <label class="ctl">Course gaz <input type="range" id="thrTravel" min="30" max="100" step="5" value="65"><output id="thrTravelO"></output></label>
   <label class="ctl">Course voie <input type="range" id="laneTravel" min="25" max="150" step="5" value="55"><output id="laneTravelO"></output></label>
   <label class="ctl"><input type="checkbox" id="snd"> Son moteur</label>
+  <label class="ctl">Son perso <input type="file" id="sndFile" accept="audio/*" style="max-width:190px"></label>
+  <label class="ctl">Montée de <input type="number" class="sec" id="s0" step="0.1" value="3.5"> à <input type="number" class="sec" id="s1" step="0.1" value="8.8"> s</label>
+  <label class="ctl">Roulement de <input type="number" class="sec" id="b0" step="0.1" value="12.5"> à <input type="number" class="sec" id="b1" step="0.1" value="19.5"> s</label>
+  <button id="sndClear">Revenir au son de synthèse</button>
+  <span id="sndInfo" style="color:var(--dim);font-size:13px"></span>
   <label class="ctl">Stick G <select id="laneMode"><option value="step">une voie par coup</option><option value="prop">position directe</option></select></label>
   <span id="pad" style="color:var(--dim);font-size:13px">Manette : aucune (appuyez sur un bouton)</span>
   </div></details>
@@ -598,7 +604,7 @@ $('#rHold').addEventListener('change', e => { if (!e.target.checked) setThr(0); 
 // Sifflement continu à plusieurs partiels qui monte avec la vitesse, plus brillant et plus fort sous
 // accélération, modulation « régénération » au freinage, souffle de roulement, couche turbine au boost,
 // et bourdonnement discret à l'arrêt. Piloté par la vitesse estimée de la voiture.
-const SND = { on: false, ctx: null, E: null };
+const SND = { on: false, ctx: null, E: null, S: null };
 const RATIOS = [1, 1.498, 2.005, 4.02];
 function buildEngine(ctx) {
   const out = ctx.createGain(); out.gain.value = 0;
@@ -636,24 +642,99 @@ function engineUpdate(E, est, target, top, boost, t) {
   set(E.bp.frequency, 500 + 2600 * Math.min(x, 1.3)); set(E.ng.gain, 0.09 * x * x + (boost ? 0.05 : 0), 0.12);
   set(E.turbo.o.frequency, f1 * 3.01); set(E.bg.gain, boost && moving ? 0.1 : 0, 0.1);
 }
+// --- Son perso : fichier audio choisi par l'utilisateur, rejoué par synthèse granulaire -----------------
+// Le fichier reste sur l'appareil (mémorisé dans le navigateur), il n'est pas publié avec la page.
+// « Montée » = portion où le moteur accélère : on s'y déplace selon la vitesse, par grains courts superposés.
+// « Roulement » = portion à vitesse stabilisée : grains longs tirés au hasard, volume selon la vitesse.
+function idb(mode, fn) {
+  return new Promise((res, rej) => {
+    const o = indexedDB.open('anki-pilote', 1);
+    o.onupgradeneeded = () => o.result.createObjectStore('kv');
+    o.onerror = () => rej(o.error);
+    o.onsuccess = () => { const tx = o.result.transaction('kv', mode), rq = fn(tx.objectStore('kv')); tx.oncomplete = () => res(rq && rq.result); tx.onerror = () => rej(tx.error); };
+  });
+}
+function sampleCfg(buf) {
+  const n = id => Number($('#' + id).value) || 0, d = buf.duration;
+  let s0 = clamp(n('s0'), 0, d - 0.5), s1 = clamp(n('s1'), s0 + 0.4, d);
+  let b0 = clamp(n('b0'), 0, d - 1), b1 = clamp(n('b1'), b0 + 0.9, d);
+  return { s0, s1, b0, b1 };
+}
+function buildSampleEngine(ctx, buf) {
+  const out = ctx.createGain(); out.gain.value = 0;
+  const comp = ctx.createDynamicsCompressor(); out.connect(comp); comp.connect(ctx.destination);
+  return { ctx, buf, out, nextW: 0, nextB: 0 };
+}
+function grain(E, t, off, dur, gain, rate) {
+  const src = E.ctx.createBufferSource(), g = E.ctx.createGain();
+  src.buffer = E.buf; src.playbackRate.value = rate;
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + dur * 0.4);
+  g.gain.setValueAtTime(gain, t + dur * 0.6); g.gain.linearRampToValueAtTime(0, t + dur);
+  src.connect(g); g.connect(E.out);
+  src.start(t, Math.max(0, off), dur * rate + 0.05); src.stop(t + dur + 0.02);
+}
+function sampleUpdate(E, cfg, est, target, top, boost, now) {
+  const x = clamp(est / top, 0, 1.6), moving = est > 3 || target > 3;
+  const torque = clamp((target - est) / 300, -1, 1), accel = Math.max(0, torque);
+  const pos = clamp(x / 1.25, 0, 1);                     // V max = 80 % de la montée, le boost va jusqu'au bout
+  const level = moving ? (0.3 + 0.6 * Math.min(x, 1)) * (0.55 + 0.6 * accel) : 0;
+  if (E.nextW < now) E.nextW = now; if (E.nextB < now) E.nextB = now;
+  while (E.nextW < now + 0.1) {
+    if (level > 0) grain(E, E.nextW, cfg.s0 + pos * (cfg.s1 - cfg.s0 - 0.25) + Math.random() * 0.04, 0.17, level, boost ? 1.1 : 1);
+    E.nextW += 0.05;
+  }
+  while (E.nextB < now + 0.4) {
+    const lv = 0.55 * Math.min(x, 1.2) ** 2;
+    if (lv > 0.005) grain(E, E.nextB, cfg.b0 + Math.random() * (cfg.b1 - cfg.b0 - 0.8), 0.7, lv, 0.85 + 0.3 * Math.min(x, 1));
+    E.nextB += 0.35;
+  }
+}
+async function loadSample(bytes) {
+  if (!SND.ctx || !bytes) return;
+  try {
+    const buf = await SND.ctx.decodeAudioData(bytes.slice(0));
+    SND.S = buildSampleEngine(SND.ctx, buf);
+    $('#sndInfo').textContent = 'Son perso actif (' + buf.duration.toFixed(1) + ' s)';
+  } catch (e) { SND.S = null; $('#sndInfo').textContent = 'Fichier audio illisible'; }
+}
 function setSound(on) {
   SND.on = on; $('#snd').checked = on; $('#rSnd').checked = on;
   if (on && !SND.ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) { status('Son indisponible sur ce navigateur.', true); return; }
     SND.ctx = new AC(); SND.E = buildEngine(SND.ctx);
+    idb('readonly', st => st.get('engineSample')).then(loadSample).catch(() => {});
   }
   if (!SND.ctx) return;
-  if (on) SND.ctx.resume(); else SND.E.out.gain.setTargetAtTime(0, SND.ctx.currentTime, 0.05);
+  if (on) SND.ctx.resume();
+  else { const t = SND.ctx.currentTime; SND.E.out.gain.setTargetAtTime(0, t, 0.05); if (SND.S) SND.S.out.gain.setTargetAtTime(0, t, 0.05); }
 }
 $('#snd').addEventListener('change', e => setSound(e.target.checked));
 $('#rSnd').addEventListener('change', e => setSound(e.target.checked));
+$('#sndFile').addEventListener('change', async e => {
+  const file = e.target.files[0]; if (!file) return;
+  const bytes = await file.arrayBuffer();
+  try { await idb('readwrite', st => st.put(bytes, 'engineSample')); } catch (err) { /* non mémorisé : valable pour cette session seulement */ }
+  setSound(true); await loadSample(bytes);
+});
+$('#sndClear').addEventListener('click', async () => {
+  if (SND.S) SND.S.out.gain.setTargetAtTime(0, SND.ctx.currentTime, 0.05);
+  SND.S = null; $('#sndFile').value = ''; $('#sndInfo').textContent = 'Son de synthèse';
+  try { await idb('readwrite', st => st.delete('engineSample')); } catch (err) { /* rien à effacer */ }
+});
+['s0', 's1', 'b0', 'b1'].forEach(id => {
+  const v = store.get('anki-snd-' + id); if (v !== null) $('#' + id).value = v;
+  $('#' + id).addEventListener('change', e => store.set('anki-snd-' + id, e.target.value));
+});
 function engineTick(vmax) {
   if (!SND.on || !SND.ctx) return;
   const c = R.car || selected, t = SND.ctx.currentTime;
-  const live = !!(c && c.connected);
-  SND.E.out.gain.setTargetAtTime(live ? 0.9 : 0, t, 0.1);
-  if (live) engineUpdate(SND.E, c.est, c.sentSpeed, Math.max(600, vmax), c.boostF > 1, t);
+  const live = !!(c && c.connected), top = Math.max(600, vmax);
+  SND.E.out.gain.setTargetAtTime(live && !SND.S ? 0.9 : 0, t, 0.1);
+  if (SND.S) SND.S.out.gain.setTargetAtTime(live ? 0.9 : 0, t, 0.1);
+  if (!live) return;
+  if (SND.S) sampleUpdate(SND.S, sampleCfg(SND.S.buf), c.est, c.sentSpeed, top, c.boostF > 1, t);
+  else engineUpdate(SND.E, c.est, c.sentSpeed, top, c.boostF > 1, t);
 }
 
 // --- Clavier ----------------------------------------------------------------
