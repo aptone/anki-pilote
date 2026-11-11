@@ -104,6 +104,10 @@
   <label class="ctl">Lignes de départ <select id="nStart"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
   <button id="bots">Lancer les bots</button>
   <label class="ctl">Virage bots <input type="range" id="botCurve" min="200" max="1500" step="50" value="500"><output id="botCurveO"></output></label>
+  <label class="ctl">V min <input type="range" id="vmin" min="0" max="500" step="25" value="200"><output id="vminO"></output></label>
+  <label class="ctl">Course gaz <input type="range" id="thrTravel" min="30" max="100" step="5" value="65"><output id="thrTravelO"></output></label>
+  <label class="ctl">Course voie <input type="range" id="laneTravel" min="25" max="150" step="5" value="55"><output id="laneTravelO"></output></label>
+  <label class="ctl"><input type="checkbox" id="snd"> Son moteur</label>
   <label class="ctl">Stick G <select id="laneMode"><option value="step">une voie par coup</option><option value="prop">position directe</option></select></label>
   <span id="pad" style="color:var(--dim);font-size:13px">Manette : aucune (appuyez sur un bouton)</span>
   </div></details>
@@ -117,13 +121,14 @@
   <div class="top">
     <b id="rName"></b><span id="rInfo"></span>
     <label class="ctl"><input type="checkbox" id="rHold"> Maintien vitesse</label>
+    <label class="ctl"><input type="checkbox" id="rSnd"> Son</label>
     <button id="rUturn">Demi-tour</button>
     <button class="danger" id="rStop">STOP</button>
     <button id="rClose">Fermer</button>
   </div>
   <div class="zones">
     <div class="lcol">
-      <div class="zone" id="rLane"><small>Position sur la piste : glisser</small><span id="rLaneThumb"></span></div>
+      <div class="zone" id="rLane"><small>Voie : poser le pouce n'importe où et glisser</small><span id="rLaneThumb"></span></div>
       <div class="rbtns"><button class="danger" id="rBrake">FREIN</button><button class="primary" id="rBoost">BOOST</button></div>
     </div>
     <div class="zone" id="rThr"><small>Gaz</small><i id="rThrFill"></i><span id="rThrVal">0</span></div>
@@ -226,7 +231,7 @@ class Car {
     this.connected = false;
     this.invert = false;
     this.kSpeed = 0; this.kOffset = 0; // consignes clavier
-    this.brake = 0; this.sentBrake = 0; this.boostF = 1;
+    this.brake = 0; this.sentBrake = 0; this.boostF = 1; this.est = 0; this.sentRamp = 1000;
     this.bot = null; this.botJit = 1; this.botNext = 0; this.lapSeq = null; this.curPiece = null;
     this.pad = Math.min(cars.length, 3);   // manette n pour la voiture n par défaut
     this.ps = { thr: 0, lx: 0, dir: 0, l1: false, r1: false, x: false };
@@ -465,7 +470,7 @@ class Car {
       const dec = Number($(this.bot ? '#brk' : '#dec').value);   // un bot freine franchement avant les virages
       const ramp = speed > this.sentSpeed ? Number($('#acc').value)
         : b > 0 ? Math.round(dec + b * Math.max(0, Number($('#brk').value) - dec)) : dec;
-      this.sentSpeed = speed; this.sentBrake = b;
+      this.sentSpeed = speed; this.sentBrake = b; this.sentRamp = ramp;
       this.send(msg.setSpeed(speed, ramp), 'speed');
     }
     if (b === 0) this.sentBrake = 0;
@@ -476,7 +481,7 @@ class Car {
   }
   nudgeSpeed(d) { this.kSpeed = clamp(this.kSpeed + d * 50, 0, Number($('#vmax').value)); }
   nudgeLane(d) { this.kOffset = clamp(this.kOffset + d * (this.invert ? -1 : 1) * LANE_STEP_MM, -HALF_TRACK_MM, HALF_TRACK_MM); }
-  stop() { if (this.bot) setBots(false); this.kSpeed = 0; this.sentSpeed = 0; this.send(msg.setSpeed(0, Number($('#brk').value)), 'speed'); }
+  stop() { if (this.bot) setBots(false); this.kSpeed = 0; this.sentSpeed = 0; this.sentRamp = Number($('#brk').value); this.send(msg.setSpeed(0, this.sentRamp), 'speed'); }
   uTurn() {
     this.send(msg.uTurn());
     // Sens inversé : le tour en cours et le tracé mémorisé ne sont plus valables
@@ -528,17 +533,25 @@ function bindRange(id, unit) {
   const up = () => { o.textContent = i.value + ' ' + unit; };
   i.addEventListener('input', up); up();
 }
-bindRange('vmax', 'mm/s'); bindRange('acc', 'mm/s²'); bindRange('dec', 'mm/s²'); bindRange('brk', 'mm/s²'); bindRange('boost', '% en plus'); bindRange('botCurve', 'mm/s');
+bindRange('vmax', 'mm/s'); bindRange('acc', 'mm/s²'); bindRange('dec', 'mm/s²'); bindRange('brk', 'mm/s²'); bindRange('boost', '% en plus'); bindRange('botCurve', 'mm/s'); bindRange('vmin', 'mm/s'); bindRange('thrTravel', '% de la zone'); bindRange('laneTravel', 'px par côté');
 
 // --- Télécommande tactile ---------------------------------------------------
 const R = { car: null, wake: null };
+// Gaz -> consigne : dès que les gaz sont ouverts la consigne part de « V min » (en dessous la voiture
+// ne bouge pas), puis monte linéairement jusqu'à V max. Toute la course est donc utile.
+function thrToSpeed(f, vmax) {
+  if (f <= 0) return 0;
+  const vmin = Math.min(Number($('#vmin').value), vmax);
+  return Math.round(vmin + f * (vmax - vmin));
+}
 function setThr(f) {
-  $('#rThrFill').style.height = (f * 100) + '%';
-  const v = Math.round(f * Number($('#vmax').value));
+  $('#rThrFill').style.height = (f * Number($('#thrTravel').value)) + '%';
+  const v = thrToSpeed(f, Number($('#vmax').value));
   $('#rThrVal').textContent = v + ' mm/s';
   if (R.car) R.car.kSpeed = v;
 }
 function setLane(f) {
+  R.lane = f;
   $('#rLaneThumb').style.left = (50 + f * 44) + '%';
   if (R.car) R.car.kOffset = f * HALF_TRACK_MM * (R.car.invert ? -1 : 1);
 }
@@ -559,9 +572,14 @@ function bindZone(el, move, end) {
   el.addEventListener('pointermove', e => { if (el.hasPointerCapture(e.pointerId)) move(e, el.getBoundingClientRect()); });
   if (end) ['pointerup', 'pointercancel'].forEach(t => el.addEventListener(t, end));
 }
-bindZone($('#rThr'), (e, r) => setThr(clamp((r.bottom - e.clientY) / r.height, 0, 1)),
+bindZone($('#rThr'), (e, r) => setThr(clamp((r.bottom - e.clientY) / (r.height * Number($('#thrTravel').value) / 100), 0, 1)),
   () => { if (!$('#rHold').checked) setThr(0); });
-bindZone($('#rLane'), (e, r) => setLane(clamp((e.clientX - r.left) / r.width * 2 - 1, -1, 1)));
+// Voie : déplacement relatif au point où le pouce se pose, pleine largeur de piste en « Course voie » pixels par côté
+let laneRef = null;
+bindZone($('#rLane'), e => {
+  if (!laneRef || laneRef.id !== e.pointerId) laneRef = { id: e.pointerId, x: e.clientX, f: R.lane || 0 };
+  setLane(clamp(laneRef.f + (e.clientX - laneRef.x) / Number($('#laneTravel').value), -1, 1));
+}, () => { laneRef = null; });
 $('#rStop').addEventListener('click', () => { setThr(0); if (R.car) R.car.stop(); });
 $('#rUturn').addEventListener('click', () => { if (R.car) R.car.uTurn(); });
 $('#rClose').addEventListener('click', closeRemote);
@@ -575,6 +593,41 @@ bindHold($('#rBoost'), on => { if (R.car) R.car.tBoost = on; });
 if (matchMedia('(min-width: 900px)').matches) $('#settings').open = true;
 const TOUCH = matchMedia('(pointer: coarse)').matches;
 $('#rHold').addEventListener('change', e => { if (!e.target.checked) setThr(0); });
+
+// --- Son moteur (synthèse Web Audio) ----------------------------------------
+// Suit la vitesse estimée de la voiture pilotée (consigne lissée par la rampe envoyée), avec passages de rapports.
+const SND = { on: false, ctx: null };
+function setSound(on) {
+  SND.on = on; $('#snd').checked = on; $('#rSnd').checked = on;
+  if (on && !SND.ctx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { status('Son indisponible sur ce navigateur.', true); return; }
+    const ctx = new AC();
+    const o1 = ctx.createOscillator(), o2 = ctx.createOscillator(), g2 = ctx.createGain(), lp = ctx.createBiquadFilter(), g = ctx.createGain();
+    o1.type = 'sawtooth'; o2.type = 'square'; g2.gain.value = 0.35; lp.type = 'lowpass'; lp.Q.value = 2; g.gain.value = 0;
+    o1.connect(lp); o2.connect(g2); g2.connect(lp); lp.connect(g); g.connect(ctx.destination);
+    o1.start(); o2.start();
+    Object.assign(SND, { ctx, o1, o2, lp, g });
+  }
+  if (!SND.ctx) return;
+  if (on) SND.ctx.resume(); else SND.g.gain.setTargetAtTime(0, SND.ctx.currentTime, 0.05);
+}
+$('#snd').addEventListener('change', e => setSound(e.target.checked));
+$('#rSnd').addEventListener('change', e => setSound(e.target.checked));
+function engineTick(vmax) {
+  if (!SND.on || !SND.ctx) return;
+  const c = R.car || selected, t = SND.ctx.currentTime;
+  if (!c || !c.connected) { SND.g.gain.setTargetAtTime(0, t, 0.1); return; }
+  const top = Math.max(600, vmax * 1.2), x = Math.min(0.999, c.est / top);
+  const GEARS = 4, gear = Math.floor(x * GEARS), inGear = x * GEARS - gear;
+  const rpm = c.est < 5 ? 0 : 0.25 + 0.75 * inGear;                 // régime 0..1, retombe à chaque rapport
+  const f = 45 + rpm * 150 + gear * 12;
+  SND.o1.frequency.setTargetAtTime(f, t, 0.04);
+  SND.o2.frequency.setTargetAtTime(f * 0.503, t, 0.04);
+  SND.lp.frequency.setTargetAtTime(300 + rpm * 1800, t, 0.05);
+  const load = c.sentSpeed > c.est + 20 ? 1 : 0.6;                   // plus fort à l'accélération
+  SND.g.gain.setTargetAtTime((0.05 + 0.13 * rpm) * load, t, 0.05);
+}
 
 // --- Clavier ----------------------------------------------------------------
 addEventListener('keydown', e => {
@@ -614,7 +667,7 @@ function readPads(vmax) {
     for (const c of cars) {
       if (c.pad !== n) continue;
       const st = c.ps;
-      if (Math.abs(thr - st.thr) > 0.005) { st.thr = thr; c.kSpeed = Math.round(thr * vmax); }
+      if (Math.abs(thr - st.thr) > 0.005) { st.thr = thr; c.kSpeed = thrToSpeed(thr, vmax); }
       c.brake = brake; c.boostF = boost ? boostF : 1;
       if (prop) {
         const f = Math.abs(x) > 0.08 ? x : 0;
@@ -664,6 +717,11 @@ setInterval(() => {
   const vmax = Number($('#vmax').value);
   readPads(vmax);
   runBots(vmax);
+  for (const c of cars) {     // vitesse estimée : la consigne suivie avec la rampe envoyée
+    const step = (c.sentRamp || 1000) * TICK_MS / 1000;
+    c.est = c.connected ? c.est + clamp(c.sentSpeed - c.est, -step, step) : 0;
+  }
+  engineTick(vmax);
   for (const c of cars) c.apply(Math.min(c.kSpeed, vmax) * (c.boostF || 1), c.kOffset);
   const tNow = performance.now();
   for (const c of cars) if (c.lapStart != null && c.connected) c.f.cur.textContent = ((tNow - c.lapStart) / 1000).toFixed(1) + ' s';
@@ -676,7 +734,10 @@ setInterval(() => {
 }, TICK_MS);
 
 // Sécurité : onglet masqué ou fermé -> arrêt.
-document.addEventListener('visibilitychange', () => { if (document.hidden) stopAll(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopAll();
+  if (SND.ctx) { if (document.hidden) SND.ctx.suspend(); else if (SND.on) SND.ctx.resume(); }
+});
 addEventListener('pagehide', stopAll);
 
 // Rafraîchissement batterie
