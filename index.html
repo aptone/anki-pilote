@@ -594,39 +594,66 @@ if (matchMedia('(min-width: 900px)').matches) $('#settings').open = true;
 const TOUCH = matchMedia('(pointer: coarse)').matches;
 $('#rHold').addEventListener('change', e => { if (!e.target.checked) setThr(0); });
 
-// --- Son moteur (synthèse Web Audio) ----------------------------------------
-// Suit la vitesse estimée de la voiture pilotée (consigne lissée par la rampe envoyée), avec passages de rapports.
-const SND = { on: false, ctx: null };
+// --- Son moteur électrique (synthèse Web Audio, sans boîte de vitesses) -----
+// Sifflement continu à plusieurs partiels qui monte avec la vitesse, plus brillant et plus fort sous
+// accélération, modulation « régénération » au freinage, souffle de roulement, couche turbine au boost,
+// et bourdonnement discret à l'arrêt. Piloté par la vitesse estimée de la voiture.
+const SND = { on: false, ctx: null, E: null };
+const RATIOS = [1, 1.498, 2.005, 4.02];
+function buildEngine(ctx) {
+  const out = ctx.createGain(); out.gain.value = 0;
+  const comp = ctx.createDynamicsCompressor(); out.connect(comp); comp.connect(ctx.destination);
+  const osc = (type, gain, dest) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = type; g.gain.value = gain; o.connect(g); g.connect(dest); o.start(); return { o, g }; };
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900; lp.Q.value = 0.8;
+  const whine = ctx.createGain(); whine.gain.value = 0; lp.connect(whine); whine.connect(out);
+  const parts = [osc('sine', 0.5, lp), osc('triangle', 0.3, lp), osc('sawtooth', 0.1, lp), osc('sine', 0.08, lp)];
+  const lfo = ctx.createOscillator(), lfoG = ctx.createGain(); lfo.frequency.value = 5.3; lfoG.gain.value = 6;   // vibrato en cents
+  lfo.connect(lfoG); parts.forEach(q => lfoG.connect(q.o.detune)); lfo.start();
+  const sub = osc('sine', 0, out);
+  const nb = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = nb.getChannelData(0);
+  for (let k = 0; k < d.length; k++) d[k] = Math.random() * 2 - 1;
+  const noise = ctx.createBufferSource(); noise.buffer = nb; noise.loop = true;
+  const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.2; bp.frequency.value = 600;
+  const nlp = ctx.createBiquadFilter(); nlp.type = 'lowpass'; nlp.frequency.value = 3200;   // coupe le sifflement aigu du bruit
+  const ng = ctx.createGain(); ng.gain.value = 0; noise.connect(bp); bp.connect(nlp); nlp.connect(ng); ng.connect(out); noise.start();
+  const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1800;
+  const bg = ctx.createGain(); bg.gain.value = 0; hp.connect(bg); bg.connect(out);
+  const turbo = osc('sawtooth', 0.5, hp);
+  return { out, lp, whine, parts, lfo, lfoG, sub, bp, ng, bg, turbo };
+}
+// est : vitesse estimée, target : consigne, top : vitesse de référence (V max), t : instant audio
+function engineUpdate(E, est, target, top, boost, t) {
+  const T = 0.06, set = (prm, v, tau) => prm.setTargetAtTime(v, t, tau || T);
+  const x = clamp(est / top, 0, 1.6);
+  const moving = est > 3 || target > 3;
+  const torque = clamp((target - est) / 300, -1, 1), accel = Math.max(0, torque), regen = Math.max(0, -torque);
+  const f1 = 220 * Math.pow(2, 2.0 * x);                         // 220 Hz à l'arrêt, 880 Hz à V max, montée continue
+  E.parts.forEach((q, k) => set(q.o.frequency, f1 * RATIOS[k]));
+  set(E.lp.frequency, moving ? 800 + 3200 * x + 2500 * accel : 600);
+  set(E.whine.gain, moving ? (0.1 + 0.22 * Math.min(x, 1)) * (0.5 + 0.8 * accel + 0.3 * regen) : 0.03, 0.09);
+  set(E.lfo.frequency, 5.3 + 22 * regen); set(E.lfoG.gain, 6 + 28 * regen);   // roucoulement de régénération
+  set(E.sub.o.frequency, f1 / 4); set(E.sub.g.gain, moving ? 0.03 * x + 0.06 * accel : 0.02);
+  set(E.bp.frequency, 500 + 2600 * Math.min(x, 1.3)); set(E.ng.gain, 0.09 * x * x + (boost ? 0.05 : 0), 0.12);
+  set(E.turbo.o.frequency, f1 * 3.01); set(E.bg.gain, boost && moving ? 0.1 : 0, 0.1);
+}
 function setSound(on) {
   SND.on = on; $('#snd').checked = on; $('#rSnd').checked = on;
   if (on && !SND.ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) { status('Son indisponible sur ce navigateur.', true); return; }
-    const ctx = new AC();
-    const o1 = ctx.createOscillator(), o2 = ctx.createOscillator(), g2 = ctx.createGain(), lp = ctx.createBiquadFilter(), g = ctx.createGain();
-    o1.type = 'sawtooth'; o2.type = 'square'; g2.gain.value = 0.35; lp.type = 'lowpass'; lp.Q.value = 2; g.gain.value = 0;
-    o1.connect(lp); o2.connect(g2); g2.connect(lp); lp.connect(g); g.connect(ctx.destination);
-    o1.start(); o2.start();
-    Object.assign(SND, { ctx, o1, o2, lp, g });
+    SND.ctx = new AC(); SND.E = buildEngine(SND.ctx);
   }
   if (!SND.ctx) return;
-  if (on) SND.ctx.resume(); else SND.g.gain.setTargetAtTime(0, SND.ctx.currentTime, 0.05);
+  if (on) SND.ctx.resume(); else SND.E.out.gain.setTargetAtTime(0, SND.ctx.currentTime, 0.05);
 }
 $('#snd').addEventListener('change', e => setSound(e.target.checked));
 $('#rSnd').addEventListener('change', e => setSound(e.target.checked));
 function engineTick(vmax) {
   if (!SND.on || !SND.ctx) return;
   const c = R.car || selected, t = SND.ctx.currentTime;
-  if (!c || !c.connected) { SND.g.gain.setTargetAtTime(0, t, 0.1); return; }
-  const top = Math.max(600, vmax * 1.2), x = Math.min(0.999, c.est / top);
-  const GEARS = 4, gear = Math.floor(x * GEARS), inGear = x * GEARS - gear;
-  const rpm = c.est < 5 ? 0 : 0.25 + 0.75 * inGear;                 // régime 0..1, retombe à chaque rapport
-  const f = 45 + rpm * 150 + gear * 12;
-  SND.o1.frequency.setTargetAtTime(f, t, 0.04);
-  SND.o2.frequency.setTargetAtTime(f * 0.503, t, 0.04);
-  SND.lp.frequency.setTargetAtTime(300 + rpm * 1800, t, 0.05);
-  const load = c.sentSpeed > c.est + 20 ? 1 : 0.6;                   // plus fort à l'accélération
-  SND.g.gain.setTargetAtTime((0.05 + 0.13 * rpm) * load, t, 0.05);
+  const live = !!(c && c.connected);
+  SND.E.out.gain.setTargetAtTime(live ? 0.9 : 0, t, 0.1);
+  if (live) engineUpdate(SND.E, c.est, c.sentSpeed, Math.max(600, vmax), c.boostF > 1, t);
 }
 
 // --- Clavier ----------------------------------------------------------------
