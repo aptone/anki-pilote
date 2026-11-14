@@ -243,6 +243,7 @@ class Car {
     this.invert = false;
     this.kSpeed = 0; this.kOffset = 0; // consignes clavier
     this.brake = 0; this.sentBrake = 0; this.boostF = 1; this.est = 0; this.sentRamp = 1000;
+    this.offHist = []; this.calOK = false; this.laneT = 0; this.repOff = null; this.rep2d = null;
     this.bot = null; this.botJit = 1; this.botNext = 0; this.lapSeq = null; this.curPiece = null;
     this.pad = Math.min(cars.length, 3);   // manette n pour la voiture n par défaut
     this.ps = { thr: 0, lx: 0, dir: 0, l1: false, r1: false, x: false };
@@ -367,7 +368,8 @@ class Car {
     this.refresh();
     log(this.label, 'connectée');
     this.send(msg.sdkMode(true));
-    // Pas de référence latérale imposée : la voiture se positionne d'elle-même à partir des codes de la piste.
+    // Pas de référence latérale imposée ici : elle est recalée automatiquement (offSeen) dès que la voiture roule droit.
+    this.calOK = false; this.offHist = [];
     this.send(msg.simple(M.VERSION_REQ));
     this.send(msg.simple(M.BATT_REQ));
   }
@@ -410,6 +412,7 @@ class Car {
       this.f.speed.textContent = spd + ' mm/s';
       if (spd > this.vtop) { this.vtop = spd; this.f.vtop.textContent = spd + ' mm/s'; }
       this.showPos(off);
+      this.offSeen(off, spd);
       this.onPiece(v.getUint8(3));
     } else if (id === M.TRANSITION && v.byteLength >= 8) {
       this.lastPiece = null;   // nouvelle pièce physique, même si l'identifiant se répète
@@ -424,6 +427,8 @@ class Car {
     } else if (id === M.DELOCALIZED) {
       this.f.piece.textContent = 'hors piste';
       log(this.label, 'délocalisée');
+    } else if (id === 0x2d && v.byteLength >= 6) {
+      this.rep2d = v.getFloat32(2, true);          // mise à jour du décalage (non documentée en détail), gardée pour le diagnostic
     } else if (id !== 0x2d && id !== 0x2a && id !== 0x36 && id !== 0x41 && id !== 0x3f) {
       log(this.label, '← ' + hex(v));
     }
@@ -463,6 +468,28 @@ class Car {
     }
     if (this.lapStart !== null) this.cur.push(id);
   }
+  // Recalage latéral. Hypothèse tirée des essais : le décalage remonté par la voiture est mesuré sur les codes de la
+  // piste, alors que les consignes de voie sont interprétées par rapport à une référence interne qui dépend de
+  // l'endroit où la voiture a été posée. Une fois la voiture stabilisée en ligne droite (aucun changement de voie
+  // depuis 2,5 s, lectures concordantes à 4 mm près), on lui indique sa position mesurée comme référence, puis on
+  // renvoie la consigne. Si le décalage remonté n'était en fait que la référence interne, mesure et consigne sont
+  // égales et rien n'est envoyé.
+  offSeen(off, spd) {
+    const now = performance.now();
+    this.repOff = off;
+    this.offHist.push([now, off]);
+    while (this.offHist.length && now - this.offHist[0][0] > 1200) this.offHist.shift();
+    if (this.calOK || spd < 100 || now - this.laneT < 2500 || this.offHist.length < 5) return;
+    const vals = this.offHist.map(h => h[1]).sort((a, b) => a - b);
+    if (vals[vals.length - 1] - vals[0] > 4) return;
+    const m = vals[vals.length >> 1], cmd = this.sentOffset;
+    this.calOK = true;
+    const extra = this.rep2d === null ? '' : ', msg 2d ' + Math.round(this.rep2d) + ' mm';
+    if (Math.abs(m - cmd) < 3) { log(this.label, 'RECALAGE : référence cohérente (consigne ' + Math.round(cmd) + ' mm, mesuré ' + Math.round(m) + ' mm' + extra + ')'); return; }
+    this.send(msg.setOffset(m), 'setoff');
+    this.sentOffset = NaN;
+    log(this.label, 'RECALAGE : consigne ' + Math.round(cmd) + ' mm mais mesuré ' + Math.round(m) + ' mm' + extra + ' → référence corrigée');
+  }
   showPos(mm) { this.pos.style.left = (50 + clamp(mm / HALF_TRACK_MM, -1, 1) * 46) + '%'; }
 
   // Applique les consignes (appelé à cadence fixe). N'émet que sur changement.
@@ -485,8 +512,8 @@ class Car {
       this.send(msg.setSpeed(speed, ramp), 'speed');
     }
     if (b === 0) this.sentBrake = 0;
-    if (Math.abs(offset - this.sentOffset) >= 4) {
-      this.sentOffset = offset;
+    if (!(Math.abs(offset - this.sentOffset) < 4)) {   // NaN (après recalage) force le renvoi
+      this.sentOffset = offset; this.laneT = performance.now();
       this.send(msg.changeLane(offset), 'lane');
     }
   }
@@ -813,7 +840,7 @@ function setBots(on) {
   $('#bots').classList.toggle('primary', on);
   if (!on) for (const c of cars) if (c.bot) c.kSpeed = 0;
   if (on) for (const c of cars) if (c.bot && c.bot.sweep) {
-    c.sw = { base: null, phase: -1, done: false };
+    c.sw = { base: null, phase: -1, done: false }; c.calOK = false; c.offHist = [];
     c.lapStart = null; c.cur = []; c.crossings = 0; c.sinceStart = false; c.f.cur.textContent = '–';
   }
 }
@@ -839,7 +866,8 @@ function runSweeper(c) {
     sw.phase = n;
     const voie = side < 0 ? 'voie centre-gauche' : 'voie centre-droite';
     const txt = sw.base === null ? 'en attente de la ligne de départ' : 'tour ' + (n + 1) + '/' + total;
-    status(c.label + ' : balayage ' + voie + ', ' + txt + '…'); log(c.label, 'BALAI ' + voie + ', ' + txt);
+    status(c.label + ' : balayage ' + voie + ', ' + txt + '…');
+    log(c.label, 'BALAI ' + voie + ', ' + txt + (c.repOff === null ? '' : ' (position mesurée ' + Math.round(c.repOff) + ' mm)'));
   }
   c.kOffset = (side * Number($('#swLane').value) + Number($('#swTrim').value)) * (c.invert ? -1 : 1);
   c.kSpeed = Number($('#swSpeed').value);
