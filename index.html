@@ -107,6 +107,7 @@
   <label class="ctl">Virage bots <input type="range" id="botCurve" min="200" max="1500" step="50" value="500"><output id="botCurveO"></output></label>
   <label class="ctl">V balai <input type="range" id="swSpeed" min="150" max="600" step="25" value="300"><output id="swSpeedO"></output></label>
   <label class="ctl">Voie balai <input type="range" id="swLane" min="10" max="45" step="1" value="25"><output id="swLaneO"></output></label>
+  <button id="diagLat">Diagnostic latéral</button>
   <label class="ctl">Centre balai <input type="range" id="swTrim" min="-30" max="30" step="1" value="0"><output id="swTrimO"></output></label>
   <label class="ctl">Tours balai <select id="swLaps"><option>1</option><option selected>2</option><option>3</option><option>4</option><option>5</option></select></label>
   <label class="ctl">V min <input type="range" id="vmin" min="0" max="500" step="25" value="200"><output id="vminO"></output></label>
@@ -147,7 +148,7 @@
 
 <footer>
   Clavier (voiture sélectionnée) : <kbd>↑</kbd><kbd>↓</kbd> vitesse · <kbd>←</kbd><kbd>→</kbd> voie · <kbd>Espace</kbd> stop · <kbd>U</kbd> demi-tour · <kbd>1</kbd>…<kbd>9</kbd> choisir la voiture · <kbd>Échap</kbd> arrêt général.<br>Manette (une par voiture, choix sur la carte) : <kbd>stick droit ↑</kbd> vitesse · <kbd>stick droit ↓</kbd> ou <kbd>ZL</kbd> frein · <kbd>ZR</kbd> boost · <kbd>stick gauche</kbd> voie · <kbd>L</kbd> demi-tour · <kbd>bouton du bas</kbd> stop.<br>Bots : choisir « Bot facile / moyen / rapide » ou « Voiture balai » dans le menu d'une carte, puis « Lancer les bots ».
-  <details><summary>Journal BLE</summary><div id="log"></div></details>
+  <details><summary>Journal BLE</summary><button id="copyLog" style="margin-top:8px">Copier le journal</button><div id="log"></div></details>
 </footer>
 
 <script>
@@ -368,7 +369,8 @@ class Car {
     this.refresh();
     log(this.label, 'connectée');
     this.send(msg.sdkMode(true));
-    // Pas de référence latérale imposée ici : elle est recalée automatiquement (offSeen) dès que la voiture roule droit.
+    // Référence latérale : la voiture est supposée posée au centre ; offSeen tente ensuite un recalage sur la mesure.
+    this.send(msg.setOffset(0));
     this.calOK = false; this.offHist = [];
     this.send(msg.simple(M.VERSION_REQ));
     this.send(msg.simple(M.BATT_REQ));
@@ -471,7 +473,7 @@ class Car {
   // Recalage latéral. Hypothèse tirée des essais : le décalage remonté par la voiture est mesuré sur les codes de la
   // piste, alors que les consignes de voie sont interprétées par rapport à une référence interne qui dépend de
   // l'endroit où la voiture a été posée. Une fois la voiture stabilisée en ligne droite (aucun changement de voie
-  // depuis 2,5 s, lectures concordantes à 4 mm près), on lui indique sa position mesurée comme référence, puis on
+  // depuis 2,5 s), on lui indique sa position mesurée comme référence (lectures concordantes à 8 mm près), puis on
   // renvoie la consigne. Si le décalage remonté n'était en fait que la référence interne, mesure et consigne sont
   // égales et rien n'est envoyé.
   offSeen(off, spd) {
@@ -481,7 +483,7 @@ class Car {
     while (this.offHist.length && now - this.offHist[0][0] > 1200) this.offHist.shift();
     if (this.calOK || spd < 100 || now - this.laneT < 2500 || this.offHist.length < 5) return;
     const vals = this.offHist.map(h => h[1]).sort((a, b) => a - b);
-    if (vals[vals.length - 1] - vals[0] > 4) return;
+    if (vals[vals.length - 1] - vals[0] > 8) return;
     const m = vals[vals.length >> 1], cmd = this.sentOffset;
     this.calOK = true;
     const extra = this.rep2d === null ? '' : ', msg 2d ' + Math.round(this.rep2d) + ' mm';
@@ -845,6 +847,35 @@ function setBots(on) {
   }
 }
 $('#bots').addEventListener('click', () => setBots(!BOTS.on));
+// Diagnostic latéral : la voiture sélectionnée roule à 300 mm/s et reçoit successivement les consignes 0, -30, +30, 0 mm
+// (4 s chacune). Toutes les 0,5 s, le journal note la consigne, le décalage remonté par la voiture et la pièce lue.
+const fmtMm = x => x === null || x === undefined ? '–' : Math.round(x) + ' mm';
+async function diagLat() {
+  const c = selected;
+  if (!c || !c.connected) { status('Diagnostic : connectez une voiture, posez-la sur une ligne droite et sélectionnez sa carte.', true); return; }
+  if (BOTS.on) setBots(false);
+  const btn = $('#diagLat'); btn.disabled = true;
+  c.calOK = true;                                   // pas de recalage automatique pendant la mesure
+  log(c.label, 'DIAG début (référence remise au centre)');
+  c.send(msg.setOffset(0), 'setoff'); c.sentOffset = 0; c.kOffset = 0; c.kSpeed = 300;
+  for (const [o, d] of [[0, 4000], [-30, 4000], [30, 4000], [0, 3000]]) {
+    c.kOffset = o;
+    for (let t = 0; t < d; t += 500) {
+      await sleep(500);
+      if (!c.connected) break;
+      log(c.label, 'DIAG consigne ' + o + ' mm | mesuré ' + fmtMm(c.repOff) + ' | msg 2d ' + fmtMm(c.rep2d) + ' | pièce/pos ' + c.f.piece.textContent);
+    }
+  }
+  c.kSpeed = 0; c.kOffset = 0;
+  log(c.label, 'DIAG fin'); status(c.label + ' : diagnostic terminé, utilisez « Copier le journal ».');
+  btn.disabled = false;
+}
+$('#diagLat').addEventListener('click', diagLat);
+$('#copyLog').addEventListener('click', async () => {
+  const txt = Array.from(document.querySelectorAll('#log div')).map(d => d.textContent).reverse().join('\n');
+  try { await navigator.clipboard.writeText(txt); status('Journal copié (' + txt.split('\n').length + ' lignes).'); }
+  catch (e) { status('Copie impossible : sélectionnez le texte du journal à la main.', true); }
+});
 // Voiture balai : vitesse lente et constante, tours alternés sur les deux voies centrales (centre-gauche puis
 // centre-droite, à « Voie balai » mm de l'axe). Le patin, large d'une demi-piste, couvre ainsi la piste en deux
 // tours sans approcher des bords. La voiture se situe latéralement grâce aux codes de la piste ;
