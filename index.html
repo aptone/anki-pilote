@@ -106,6 +106,7 @@
   <button id="bots">Lancer les bots</button>
   <label class="ctl">Virage bots <input type="range" id="botCurve" min="200" max="1500" step="50" value="500"><output id="botCurveO"></output></label>
   <label class="ctl">V balai <input type="range" id="swSpeed" min="150" max="600" step="25" value="300"><output id="swSpeedO"></output></label>
+  <label class="ctl">Voie balai <input type="range" id="swLane" min="10" max="45" step="1" value="25"><output id="swLaneO"></output></label>
   <label class="ctl">Centre balai <input type="range" id="swTrim" min="-30" max="30" step="1" value="0"><output id="swTrimO"></output></label>
   <label class="ctl">Tours balai <select id="swLaps"><option>1</option><option selected>2</option><option>3</option><option>4</option><option>5</option></select></label>
   <label class="ctl">V min <input type="range" id="vmin" min="0" max="500" step="25" value="200"><output id="vminO"></output></label>
@@ -366,7 +367,7 @@ class Car {
     this.refresh();
     log(this.label, 'connectée');
     this.send(msg.sdkMode(true));
-    this.send(msg.setOffset(0));            // référence latérale : la voiture est supposée au centre
+    // Pas de référence latérale imposée : la voiture se positionne d'elle-même à partir des codes de la piste.
     this.send(msg.simple(M.VERSION_REQ));
     this.send(msg.simple(M.BATT_REQ));
   }
@@ -543,11 +544,11 @@ function bindRange(id, unit) {
   const up = () => { o.textContent = i.value + ' ' + unit; };
   i.addEventListener('input', up); up();
 }
-['swTrim', 'swLaps'].forEach(id => {     // réglages balai mémorisés sur l'appareil
+['swTrim', 'swLaps', 'swLane'].forEach(id => {     // réglages balai mémorisés sur l'appareil
   const v = store.get('anki-' + id); if (v !== null) $('#' + id).value = v;
   $('#' + id).addEventListener('change', e => store.set('anki-' + id, e.target.value));
 });
-bindRange('vmax', 'mm/s'); bindRange('acc', 'mm/s²'); bindRange('dec', 'mm/s²'); bindRange('brk', 'mm/s²'); bindRange('boost', '% en plus'); bindRange('botCurve', 'mm/s'); bindRange('swSpeed', 'mm/s'); bindRange('swTrim', 'mm'); bindRange('vmin', 'mm/s'); bindRange('thrTravel', '% de la zone'); bindRange('laneTravel', 'px par côté');
+bindRange('vmax', 'mm/s'); bindRange('acc', 'mm/s²'); bindRange('dec', 'mm/s²'); bindRange('brk', 'mm/s²'); bindRange('boost', '% en plus'); bindRange('botCurve', 'mm/s'); bindRange('swSpeed', 'mm/s'); bindRange('swTrim', 'mm'); bindRange('swLane', 'mm du centre'); bindRange('vmin', 'mm/s'); bindRange('thrTravel', '% de la zone'); bindRange('laneTravel', 'px par côté');
 
 // --- Télécommande tactile ---------------------------------------------------
 const R = { car: null, wake: null };
@@ -817,9 +818,10 @@ function setBots(on) {
   }
 }
 $('#bots').addEventListener('click', () => setBots(!BOTS.on));
-// Voiture balai : vitesse lente et constante, centrée sur la piste. Le patin (demi-largeur de piste) couvre
-// alors les deux voies centrales sans approcher des bords. « Centre balai » corrige un éventuel décalage
-// de la référence latérale (prise à la connexion, voiture supposée posée au centre).
+// Voiture balai : vitesse lente et constante, tours alternés sur les deux voies centrales (centre-gauche puis
+// centre-droite, à « Voie balai » mm de l'axe). Le patin, large d'une demi-piste, couvre ainsi la piste en deux
+// tours sans approcher des bords. La voiture se situe latéralement grâce aux codes de la piste ;
+// « Centre balai » n'est qu'un ajustement fin si le patin n'est pas symétrique.
 // La page compte les tours grâce à la ligne de départ et arrête la voiture après « Tours balai » tours.
 function runSweeper(c) {
   const sw = c.sw || (c.sw = { base: null, phase: -1, done: false });
@@ -832,12 +834,14 @@ function runSweeper(c) {
     status(c.label + ' : balayage terminé (' + total + ' tour' + (total > 1 ? 's' : '') + ').'); log(c.label, 'BALAI terminé');
     return;
   }
+  const side = n % 2 === 0 ? -1 : 1;                             // tours pairs à gauche, impairs à droite
   if (n !== sw.phase) {
     sw.phase = n;
+    const voie = side < 0 ? 'voie centre-gauche' : 'voie centre-droite';
     const txt = sw.base === null ? 'en attente de la ligne de départ' : 'tour ' + (n + 1) + '/' + total;
-    status(c.label + ' : balayage des voies centrales, ' + txt + '…'); log(c.label, 'BALAI ' + txt);
+    status(c.label + ' : balayage ' + voie + ', ' + txt + '…'); log(c.label, 'BALAI ' + voie + ', ' + txt);
   }
-  c.kOffset = Number($('#swTrim').value) * (c.invert ? -1 : 1);
+  c.kOffset = (side * Number($('#swLane').value) + Number($('#swTrim').value)) * (c.invert ? -1 : 1);
   c.kSpeed = Number($('#swSpeed').value);
 }
 function runBots(vmax) {
