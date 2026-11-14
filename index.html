@@ -105,6 +105,8 @@
   <label class="ctl">Lignes de départ <select id="nStart"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
   <button id="bots">Lancer les bots</button>
   <label class="ctl">Virage bots <input type="range" id="botCurve" min="200" max="1500" step="50" value="500"><output id="botCurveO"></output></label>
+  <label class="ctl">V balai <input type="range" id="swSpeed" min="150" max="600" step="25" value="300"><output id="swSpeedO"></output></label>
+  <label class="ctl">Décalage balai <input type="range" id="swOff" min="15" max="68" step="1" value="45"><output id="swOffO"></output></label>
   <label class="ctl">V min <input type="range" id="vmin" min="0" max="500" step="25" value="200"><output id="vminO"></output></label>
   <label class="ctl">Course gaz <input type="range" id="thrTravel" min="30" max="100" step="5" value="65"><output id="thrTravelO"></output></label>
   <label class="ctl">Course voie <input type="range" id="laneTravel" min="25" max="150" step="5" value="55"><output id="laneTravelO"></output></label>
@@ -142,7 +144,7 @@
 </div>
 
 <footer>
-  Clavier (voiture sélectionnée) : <kbd>↑</kbd><kbd>↓</kbd> vitesse · <kbd>←</kbd><kbd>→</kbd> voie · <kbd>Espace</kbd> stop · <kbd>U</kbd> demi-tour · <kbd>1</kbd>…<kbd>9</kbd> choisir la voiture · <kbd>Échap</kbd> arrêt général.<br>Manette (une par voiture, choix sur la carte) : <kbd>stick droit ↑</kbd> vitesse · <kbd>stick droit ↓</kbd> ou <kbd>ZL</kbd> frein · <kbd>ZR</kbd> boost · <kbd>stick gauche</kbd> voie · <kbd>L</kbd> demi-tour · <kbd>bouton du bas</kbd> stop.<br>Bots : choisir « Bot facile / moyen / rapide » dans le menu d'une carte, puis « Lancer les bots ».
+  Clavier (voiture sélectionnée) : <kbd>↑</kbd><kbd>↓</kbd> vitesse · <kbd>←</kbd><kbd>→</kbd> voie · <kbd>Espace</kbd> stop · <kbd>U</kbd> demi-tour · <kbd>1</kbd>…<kbd>9</kbd> choisir la voiture · <kbd>Échap</kbd> arrêt général.<br>Manette (une par voiture, choix sur la carte) : <kbd>stick droit ↑</kbd> vitesse · <kbd>stick droit ↓</kbd> ou <kbd>ZL</kbd> frein · <kbd>ZR</kbd> boost · <kbd>stick gauche</kbd> voie · <kbd>L</kbd> demi-tour · <kbd>bouton du bas</kbd> stop.<br>Bots : choisir « Bot facile / moyen / rapide » ou « Voiture balai » dans le menu d'une carte, puis « Lancer les bots ».
   <details><summary>Journal BLE</summary><div id="log"></div></details>
 </footer>
 
@@ -168,6 +170,7 @@ const BOT_LEVELS = [
   { name: 'Bot facile', s: 0.6, c: 0.8 },
   { name: 'Bot moyen', s: 0.8, c: 0.9 },
   { name: 'Bot rapide', s: 1.0, c: 1.0 },
+  { name: 'Voiture balai', sweep: true },
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
@@ -539,7 +542,7 @@ function bindRange(id, unit) {
   const up = () => { o.textContent = i.value + ' ' + unit; };
   i.addEventListener('input', up); up();
 }
-bindRange('vmax', 'mm/s'); bindRange('acc', 'mm/s²'); bindRange('dec', 'mm/s²'); bindRange('brk', 'mm/s²'); bindRange('boost', '% en plus'); bindRange('botCurve', 'mm/s'); bindRange('vmin', 'mm/s'); bindRange('thrTravel', '% de la zone'); bindRange('laneTravel', 'px par côté');
+bindRange('vmax', 'mm/s'); bindRange('acc', 'mm/s²'); bindRange('dec', 'mm/s²'); bindRange('brk', 'mm/s²'); bindRange('boost', '% en plus'); bindRange('botCurve', 'mm/s'); bindRange('swSpeed', 'mm/s'); bindRange('swOff', 'mm du centre'); bindRange('vmin', 'mm/s'); bindRange('thrTravel', '% de la zone'); bindRange('laneTravel', 'px par côté');
 
 // --- Télécommande tactile ---------------------------------------------------
 const R = { car: null, wake: null };
@@ -803,13 +806,39 @@ function setBots(on) {
   $('#bots').textContent = on ? 'Arrêter les bots' : 'Lancer les bots';
   $('#bots').classList.toggle('primary', on);
   if (!on) for (const c of cars) if (c.bot) c.kSpeed = 0;
+  if (on) for (const c of cars) if (c.bot && c.bot.sweep) {
+    c.sw = { base: null, phase: -1, done: false };
+    c.lapStart = null; c.cur = []; c.crossings = 0; c.sinceStart = false; c.f.cur.textContent = '–';
+  }
 }
 $('#bots').addEventListener('click', () => setBots(!BOTS.on));
+// Voiture balai : vitesse lente et constante, un tour complet décalée d'un côté de la piste, un tour de l'autre, puis arrêt.
+// Le suivi de piste est fait par la voiture elle-même ; la page ne fait que compter les tours grâce à la ligne de départ.
+// La portion parcourue avant le premier passage sur la ligne est balayée côté gauche en supplément.
+function runSweeper(c) {
+  const sw = c.sw || (c.sw = { base: null, phase: -1, done: false });
+  if (sw.done) { c.kSpeed = 0; return; }
+  if (sw.base === null && c.lapStart !== null) sw.base = c.laps;
+  const n = sw.base === null ? 0 : c.laps - sw.base;           // tours complets depuis le premier passage sur la ligne
+  if (n >= 2) {
+    sw.done = true; c.kSpeed = 0; c.kOffset = 0;
+    status(c.label + ' : balayage terminé (un tour de chaque côté).'); log(c.label, 'BALAI terminé');
+    return;
+  }
+  if (n !== sw.phase) {
+    sw.phase = n;
+    const txt = n === 0 ? 'côté gauche' : 'côté droit';
+    status(c.label + ' : balayage ' + txt + (sw.base === null ? ' (en attente de la ligne de départ)' : '') + '…'); log(c.label, 'BALAI ' + txt);
+  }
+  c.kOffset = (n === 0 ? -1 : 1) * Number($('#swOff').value) * (c.invert ? -1 : 1);
+  c.kSpeed = Number($('#swSpeed').value);
+}
 function runBots(vmax) {
   if (!BOTS.on) return;
   const vCurve = Number($('#botCurve').value), now = performance.now();
   for (const c of cars) {
     if (!c.bot || !c.connected) continue;
+    if (c.bot.sweep) { runSweeper(c); continue; }
     const next = c.lapSeq ? c.lapSeq[c.cur.length % c.lapSeq.length] : null;
     const curve = !c.lapSeq || PIECE_KIND[c.curPiece] === 'V' || PIECE_KIND[next] === 'V';
     const vs = c.bot.s * vmax;
