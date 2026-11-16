@@ -105,14 +105,14 @@
   <label class="ctl">Lignes de départ <select id="nStart"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
   <button id="bots">Lancer les bots</button>
   <label class="ctl">Virage bots <input type="range" id="botCurve" min="200" max="1500" step="50" value="500"><output id="botCurveO"></output></label>
-  <label class="ctl">V balai <input type="range" id="swSpeed" min="150" max="600" step="25" value="300"><output id="swSpeedO"></output></label>
+  <label class="ctl">V balai <input type="range" id="swSpeed" min="300" max="600" step="25" value="325"><output id="swSpeedO"></output></label>
   <label class="ctl">Voie balai <input type="range" id="swLane" min="10" max="45" step="1" value="25"><output id="swLaneO"></output></label>
   <button id="diagLat">Diagnostic latéral</button>
   <label class="ctl">Centre balai <input type="range" id="swTrim" min="-30" max="30" step="1" value="0"><output id="swTrimO"></output></label>
   <label class="ctl">Tours balai <select id="swLaps"><option>1</option><option selected>2</option><option>3</option><option>4</option><option>5</option></select></label>
   <label class="ctl">V min <input type="range" id="vmin" min="0" max="500" step="25" value="200"><output id="vminO"></output></label>
   <label class="ctl">Course gaz <input type="range" id="thrTravel" min="30" max="100" step="5" value="65"><output id="thrTravelO"></output></label>
-  <label class="ctl">Course voie <input type="range" id="laneTravel" min="25" max="150" step="5" value="55"><output id="laneTravelO"></output></label>
+  <label class="ctl">Course voie <input type="range" id="laneTravel" min="10" max="150" step="5" value="30"><output id="laneTravelO"></output></label>
   <label class="ctl"><input type="checkbox" id="snd"> Son moteur</label>
   <label class="ctl">Son perso <input type="file" id="sndFile" accept="audio/*" style="max-width:190px"></label>
   <label class="ctl">Montée de <input type="number" class="sec" id="s0" step="0.1" value="3.5"> à <input type="number" class="sec" id="s1" step="0.1" value="8.8"> s</label>
@@ -166,7 +166,15 @@ const M = {
 const HALF_TRACK_MM = 68;      // demi-largeur utile de la piste
 const LANE_STEP_MM = 17;       // pas clavier
 // Identifiants de pièces Overdrive (relevés communautaires, à confirmer sur votre jeu)
-const START_PIECES = [33, 34];   // les deux identifiants portés par la pièce départ/arrivée
+const START_PIECES = [33, 34];
+// Lignes droites : 48 codes par pièce = 16 voies de codes (bords à ±64 mm) × 3 positions le long de la pièce.
+// Constaté sur les journaux du 14/11 : location_id = 3 × voie + position ; la numérotation des voies s'inverse
+// quand la pièce est parcourue dans l'autre sens (position décroissante).
+// Relevé du 14/11 (5 tours, un par position latérale) : même principe sur la pièce départ 34, avec 2 positions par voie.
+// Virages, pièces 33 et 57 : numérotation différente, non utilisée pour la mesure.
+const CODE_PER = { 36: 3, 39: 3, 40: 3, 48: 3, 51: 3, 34: 2 };   // codes par voie, par type de pièce
+const CODE_LANES = 16, CODE_HALF = 64;
+const LANE_MIN_SPEED = 320;   // sous ~300 mm/s la voiture ignore les changements de voie (constaté à 250)   // les deux identifiants portés par la pièce départ/arrivée
 const PIECE_KIND = { 33: 'Dép', 34: 'Arr', 10: 'X', 17: 'V', 18: 'V', 20: 'V', 23: 'V', 24: 'V', 27: 'V', 36: 'D', 39: 'D', 40: 'D', 48: 'D', 51: 'D' };
 // Bots : part de V max en ligne droite, part de « Virage bots » en virage
 const BOT_LEVELS = [
@@ -244,7 +252,9 @@ class Car {
     this.invert = false;
     this.kSpeed = 0; this.kOffset = 0; // consignes clavier
     this.brake = 0; this.sentBrake = 0; this.boostF = 1; this.est = 0; this.sentRamp = 1000;
-    this.offHist = []; this.calOK = false; this.laneT = 0; this.repOff = null; this.rep2d = null;
+    this.laneT = -1e9; this.repOff = null; this.rep2d = null; this.bias = 0; this.biasOK = false; this.laneHold = false; this.resendT = 0; this.refT = 0; this.rawLat = false;
+    this.locPrev = null; this.codeOff = null; this.codeT = 0;
+    this.sentOffset = 0;
     this.bot = null; this.botJit = 1; this.botNext = 0; this.lapSeq = null; this.curPiece = null;
     this.pad = Math.min(cars.length, 3);   // manette n pour la voiture n par défaut
     this.ps = { thr: 0, lx: 0, dir: 0, l1: false, r1: false, x: false };
@@ -305,7 +315,7 @@ class Car {
     padSel.value = String(this.pad);
     padSel.addEventListener('change', () => {
       const v = padSel.value;
-      this.kSpeed = 0; this.brake = 0; this.boostF = 1;
+      this.kSpeed = 0; this.brake = 0; this.boostF = 1; this.laneHold = false;
       if (v[0] === 'b') { this.pad = -1; this.bot = BOT_LEVELS[Number(v[1])]; this.botNext = 0; }
       else { this.pad = Number(v); this.bot = null; }
     });
@@ -369,9 +379,9 @@ class Car {
     this.refresh();
     log(this.label, 'connectée');
     this.send(msg.sdkMode(true));
-    // Référence latérale : la voiture est supposée posée au centre ; offSeen tente ensuite un recalage sur la mesure.
+    // Référence interne de la voiture mise à 0 ; l'écart avec sa position réelle est ensuite mesuré sur les codes (latSeen).
     this.send(msg.setOffset(0));
-    this.calOK = false; this.offHist = [];
+    this.bias = 0; this.biasOK = false; this.laneHold = false; this.locPrev = null; this.codeOff = null;
     this.send(msg.simple(M.VERSION_REQ));
     this.send(msg.simple(M.BATT_REQ));
   }
@@ -413,8 +423,8 @@ class Car {
       this.f.piece.textContent = v.getUint8(3) + ' / ' + v.getUint8(2);
       this.f.speed.textContent = spd + ' mm/s';
       if (spd > this.vtop) { this.vtop = spd; this.f.vtop.textContent = spd + ' mm/s'; }
-      this.showPos(off);
-      this.offSeen(off, spd);
+      this.latSeen(v.getUint8(3), v.getUint8(2), off, spd);
+      this.showPos(off - this.bias);
       this.onPiece(v.getUint8(3));
     } else if (id === M.TRANSITION && v.byteLength >= 8) {
       this.lastPiece = null;   // nouvelle pièce physique, même si l'identifiant se répète
@@ -470,27 +480,45 @@ class Car {
     }
     if (this.lapStart !== null) this.cur.push(id);
   }
-  // Recalage latéral. Hypothèse tirée des essais : le décalage remonté par la voiture est mesuré sur les codes de la
-  // piste, alors que les consignes de voie sont interprétées par rapport à une référence interne qui dépend de
-  // l'endroit où la voiture a été posée. Une fois la voiture stabilisée en ligne droite (aucun changement de voie
-  // depuis 2,5 s), on lui indique sa position mesurée comme référence (lectures concordantes à 8 mm près), puis on
-  // renvoie la consigne. Si le décalage remonté n'était en fait que la référence interne, mesure et consigne sont
-  // égales et rien n'est envoyé.
-  offSeen(off, spd) {
+  // Position latérale. Constats des essais :
+  //  - le décalage remonté par la voiture (off) est sa référence interne : elle part de l'endroit où la voiture a été
+  //    posée et ne se corrige d'elle-même qu'en butée sur un bord ; les consignes de voie sont relatives à cette référence ;
+  //  - la position réelle se lit sur les codes de la piste (lignes droites et pièce départ 34) : voie = code / codes par voie,
+  //    numérotation inversée quand la pièce est parcourue dans l'autre sens (codes décroissants).
+  // On mesure donc l'écart « bias » = référence interne − position réelle, et chaque consigne est envoyée décalée de cet
+  // écart (voir apply). Aucune hypothèse sur l'effet d'un recalage de la voiture : la boucle se referme sur la mesure.
+  latSeen(piece, loc, off, spd) {
     const now = performance.now();
     this.repOff = off;
-    this.offHist.push([now, off]);
-    while (this.offHist.length && now - this.offHist[0][0] > 1200) this.offHist.shift();
-    if (this.calOK || spd < 100 || now - this.laneT < 2500 || this.offHist.length < 5) return;
-    const vals = this.offHist.map(h => h[1]).sort((a, b) => a - b);
-    if (vals[vals.length - 1] - vals[0] > 8) return;
-    const m = vals[vals.length >> 1], cmd = this.sentOffset;
-    this.calOK = true;
-    const extra = this.rep2d === null ? '' : ', msg 2d ' + Math.round(this.rep2d) + ' mm';
-    if (Math.abs(m - cmd) < 3) { log(this.label, 'RECALAGE : référence cohérente (consigne ' + Math.round(cmd) + ' mm, mesuré ' + Math.round(m) + ' mm' + extra + ')'); return; }
-    this.send(msg.setOffset(m), 'setoff');
-    this.sentOffset = NaN;
-    log(this.label, 'RECALAGE : consigne ' + Math.round(cmd) + ' mm mais mesuré ' + Math.round(m) + ' mm' + extra + ' → référence corrigée');
+    const prev = this.locPrev; this.locPrev = { piece, loc };
+    const stable = spd >= 100 && now - this.laneT > 2500;
+    // Consigne restée sans effet (vitesse trop basse à l'envoi, message perdu) : on la renvoie.
+    if (stable && !this.laneHold && Number.isFinite(this.sentOffset) && Math.abs(off - this.sentOffset) > 8 && Math.abs(off) < 60 && now - this.resendT > 3000) {
+      this.resendT = now; this.sentOffset = NaN;
+      log(this.label, 'VOIE consigne sans effet (la voiture se croit à ' + Math.round(off) + ' mm) → renvoi');
+    }
+    const per = CODE_PER[piece];
+    if (!per || loc >= per * CODE_LANES || !prev || prev.piece !== piece) return;
+    const lane = Math.floor(loc / per);
+    if (lane !== Math.floor(prev.loc / per) || loc % per === prev.loc % per) return;      // sens indéterminé
+    const fromLeft = loc % per > prev.loc % per ? lane : CODE_LANES - 1 - lane;
+    const m = (fromLeft - (CODE_LANES - 1) / 2) * 2 * CODE_HALF / (CODE_LANES - 1);
+    this.codeOff = m; this.codeT = now;
+    if (!stable || this.rawLat) return;
+    const nb = off - m;
+    // Une voie de codes fait 8,5 mm : on ne retouche l'écart que s'il change de plus d'une voie.
+    if (!this.biasOK || Math.abs(nb - this.bias) > 9) {
+      if (Math.abs(nb - this.bias) > 9) log(this.label, 'VOIE pièce ' + piece + ' : position réelle ' + Math.round(m) + ' mm, la voiture se croit à ' + Math.round(off) + ' mm → consignes décalées de ' + Math.round(nb) + ' mm');
+      this.bias = nb;
+    } else if (!this.laneHold && Math.abs(this.kOffset - m) > 12 && now - this.refT > 4000) {
+      // Écart connu, consigne envoyée, mais la voiture n'est pas à la position visée : la consigne sortait sans doute de
+      // la plage qu'elle accepte. On lui redonne sa position réelle comme référence et on renvoie la consigne.
+      this.refT = now;
+      this.send(msg.setOffset(m), 'setoff');
+      this.bias = 0; this.sentOffset = NaN;
+      log(this.label, 'VOIE position visée ' + Math.round(this.kOffset) + ' mm non atteinte (réelle ' + Math.round(m) + ' mm) → référence de la voiture recalée');
+    }
+    this.biasOK = true;
   }
   showPos(mm) { this.pos.style.left = (50 + clamp(mm / HALF_TRACK_MM, -1, 1) * 46) + '%'; }
 
@@ -504,6 +532,8 @@ class Car {
     // et une valeur entre Décél. et Frein, proportionnelle à l'appui, quand le frein est actionné.
     const b = this.brake || 0;
     if (b > 0) speed = 0;
+    // Un changement de voie vient d'être demandé : la voiture l'ignore si elle roule trop lentement.
+    else if (speed > 0 && speed < LANE_MIN_SPEED && performance.now() - this.laneT < 2000) speed = LANE_MIN_SPEED;
     const speedChanged = speed !== this.sentSpeed && (Math.abs(speed - this.sentSpeed) >= 10 || speed === 0);
     const brakeChanged = b > 0 && Math.abs(b - this.sentBrake) >= 0.1;
     if (speedChanged || brakeChanged) {
@@ -514,9 +544,10 @@ class Car {
       this.send(msg.setSpeed(speed, ramp), 'speed');
     }
     if (b === 0) this.sentBrake = 0;
-    if (!(Math.abs(offset - this.sentOffset) < 4)) {   // NaN (après recalage) force le renvoi
-      this.sentOffset = offset; this.laneT = performance.now();
-      this.send(msg.changeLane(offset), 'lane');
+    const cmd = Math.round(offset + this.bias);                     // consigne dans la référence interne de la voiture
+    if (!this.laneHold && !(Math.abs(cmd - this.sentOffset) < 4)) {   // NaN force le renvoi
+      this.sentOffset = cmd; this.laneT = performance.now();
+      this.send(msg.changeLane(cmd), 'lane');
     }
   }
   nudgeSpeed(d) { this.kSpeed = clamp(this.kSpeed + d * 50, 0, Number($('#vmax').value)); }
@@ -668,7 +699,7 @@ function buildEngine(ctx) {
 // est : vitesse estimée, target : consigne, top : vitesse de référence (V max), t : instant audio
 function engineUpdate(E, est, target, top, boost, t) {
   const T = 0.06, set = (prm, v, tau) => prm.setTargetAtTime(v, t, tau || T);
-  const x = clamp(est / top, 0, 1.6);
+  const x = clamp((0.6 * est + 0.4 * target) / top, 0, 1.6);   // suit la vitesse, avec une part immédiate de la consigne
   const moving = est > 3 || target > 3;
   const torque = clamp((target - est) / 300, -1, 1), accel = Math.max(0, torque), regen = Math.max(0, -torque);
   const f1 = 220 * Math.pow(2, 2.0 * x);                         // 220 Hz à l'arrêt, 880 Hz à V max, montée continue
@@ -767,12 +798,15 @@ $('#sndClear').addEventListener('click', async () => {
 function engineTick(vmax) {
   if (!SND.on || !SND.ctx) return;
   const c = R.car || selected, t = SND.ctx.currentTime;
-  const live = !!(c && c.connected), top = Math.max(600, vmax);
+  const live = !!(c && c.connected), top = 1000;
+  // Vitesses ramenées à la course des gaz : V min -> 12 %, V max -> 100 % (le boost dépasse), quel que soit le réglage.
+  const vmin = Math.min(Number($('#vmin').value), vmax - 1);
+  const norm = v => v <= 0 ? 0 : top * (0.12 + 0.88 * clamp((v - vmin) / (vmax - vmin), 0, 1.7));
   SND.E.out.gain.setTargetAtTime(live && !SND.S ? 0.9 : 0, t, 0.1);
   if (SND.S) SND.S.out.gain.setTargetAtTime(live ? 0.9 : 0, t, 0.1);
   if (!live) return;
-  if (SND.S) sampleUpdate(SND.S, sampleCfg(SND.S.buf), c.est, c.sentSpeed, top, c.boostF > 1, t);
-  else engineUpdate(SND.E, c.est, c.sentSpeed, top, c.boostF > 1, t);
+  if (SND.S) sampleUpdate(SND.S, sampleCfg(SND.S.buf), norm(c.est), norm(c.sentSpeed), top, c.boostF > 1, t);
+  else engineUpdate(SND.E, norm(c.est), norm(c.sentSpeed), top, c.boostF > 1, t);
 }
 
 // --- Clavier ----------------------------------------------------------------
@@ -840,9 +874,9 @@ function setBots(on) {
   BOTS.on = on;
   $('#bots').textContent = on ? 'Arrêter les bots' : 'Lancer les bots';
   $('#bots').classList.toggle('primary', on);
-  if (!on) for (const c of cars) if (c.bot) c.kSpeed = 0;
+  if (!on) for (const c of cars) { c.laneHold = false; if (c.bot) c.kSpeed = 0; }
   if (on) for (const c of cars) if (c.bot && c.bot.sweep) {
-    c.sw = { base: null, phase: -1, done: false }; c.calOK = false; c.offHist = [];
+    c.sw = { base: null, phase: -1, done: false, measured: false }; c.codeOff = null; c.biasOK = false;   // le camion a pu être déplacé à la main
     c.lapStart = null; c.cur = []; c.crossings = 0; c.sinceStart = false; c.f.cur.textContent = '–';
   }
 }
@@ -855,7 +889,7 @@ async function diagLat() {
   if (!c || !c.connected) { status('Diagnostic : connectez une voiture, posez-la sur une ligne droite et sélectionnez sa carte.', true); return; }
   if (BOTS.on) setBots(false);
   const btn = $('#diagLat'); btn.disabled = true;
-  c.calOK = true;                                   // pas de recalage automatique pendant la mesure
+  c.rawLat = true; c.bias = 0;                       // comportement brut de la voiture, sans correction
   log(c.label, 'DIAG début (référence remise au centre)');
   c.send(msg.setOffset(0), 'setoff'); c.sentOffset = 0; c.kOffset = 0; c.kSpeed = 300;
   for (const [o, d] of [[0, 4000], [-30, 4000], [30, 4000], [0, 3000]]) {
@@ -863,10 +897,10 @@ async function diagLat() {
     for (let t = 0; t < d; t += 500) {
       await sleep(500);
       if (!c.connected) break;
-      log(c.label, 'DIAG consigne ' + o + ' mm | mesuré ' + fmtMm(c.repOff) + ' | msg 2d ' + fmtMm(c.rep2d) + ' | pièce/pos ' + c.f.piece.textContent);
+      log(c.label, 'DIAG consigne ' + o + ' mm | mesuré ' + fmtMm(c.repOff) + ' | codes ' + (c.codeOff !== null && performance.now() - c.codeT < 1500 ? fmtMm(c.codeOff) : '–') + ' | pièce/pos ' + c.f.piece.textContent);
     }
   }
-  c.kSpeed = 0; c.kOffset = 0;
+  c.kSpeed = 0; c.kOffset = 0; c.rawLat = false; c.biasOK = false;
   log(c.label, 'DIAG fin'); status(c.label + ' : diagnostic terminé, utilisez « Copier le journal ».');
   btn.disabled = false;
 }
@@ -884,6 +918,19 @@ $('#copyLog').addEventListener('click', async () => {
 function runSweeper(c) {
   const sw = c.sw || (c.sw = { base: null, phase: -1, done: false });
   if (sw.done) { c.kSpeed = 0; return; }
+  if (!sw.measured) {
+    // Tant que la position n'a pas été lue sur les codes d'une ligne droite (et la voiture recalée si besoin),
+    // aucune consigne de voie : une consigne relative à une mauvaise référence peut l'envoyer hors piste.
+    c.kSpeed = Number($('#swSpeed').value);
+    if (!c.biasOK) {
+      c.laneHold = true;
+      if (sw.phase !== -2) { sw.phase = -2; status(c.label + ' : mesure de la position sur la piste…'); }
+      return;
+    }
+    c.laneHold = false; sw.measured = true; sw.phase = -1;
+    log(c.label, 'BALAI position mesurée sur les codes : ' + Math.round(c.codeOff) + ' mm (la voiture se croyait à ' + Math.round(c.repOff) + ' mm)');
+    c.lapStart = null; c.cur = []; c.crossings = 0; c.sinceStart = false; c.f.cur.textContent = '–';   // tours complets à partir d'ici
+  }
   if (sw.base === null && c.lapStart !== null) sw.base = c.laps;
   const n = sw.base === null ? 0 : c.laps - sw.base;           // tours complets depuis le premier passage sur la ligne
   const total = Number($('#swLaps').value);
