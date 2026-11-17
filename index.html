@@ -73,17 +73,23 @@
   #remote .zones { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr minmax(96px, 26%); gap: 10px; }
   .zone { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; touch-action: none; overflow: hidden; }
   .zone small { position: absolute; left: 10px; top: 8px; color: var(--dim); pointer-events: none; }
-  #rLane::before { content: ""; position: absolute; left: 50%; top: 15%; bottom: 15%; width: 1px; background: var(--line); }
-  #rLaneThumb { position: absolute; top: 20%; bottom: 20%; width: 44px; margin-left: -22px; left: 50%; border-radius: 8px; background: var(--text); pointer-events: none; }
+  #rLane::before { content: ""; position: absolute; left: 50%; top: 22%; bottom: 22%; width: 1px; background: var(--line); }
+  #rLaneThumb { position: absolute; top: 6px; bottom: 6px; width: 40px; margin-left: -20px; left: 50%; border-radius: 8px; background: var(--text); pointer-events: none; }
+  .lanewrap { display: flex; justify-content: center; }
+  #rLanePos { position: absolute; bottom: 0; height: 5px; width: 12px; margin-left: -6px; left: 50%; border-radius: 3px; background: var(--accent); pointer-events: none; }
   #rThrFill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: var(--accent); pointer-events: none; }
   #rThrVal { position: absolute; left: 0; right: 0; bottom: 10px; text-align: center; font-weight: 600; pointer-events: none; font-variant-numeric: tabular-nums; }
   #rStop { padding: 12px 22px; font-weight: 700; }
+  #setClose { display: none; flex-basis: 100%; padding: 12px; }
+  body.setover #settings { position: fixed; inset: 8px; z-index: 20; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow: auto; }
+  body.setover #settings > summary { display: none; }
+  body.setover #setClose { display: block; }
   #settings { flex-basis: 100%; } #settings summary { color: var(--dim); cursor: pointer; }
   .set { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding-top: 10px; }
   input.sec { width: 4.6em; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font: inherit; }
   .lcol { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-  #rLane { flex: 3; }
-  .rbtns { flex: 2; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-height: 64px; }
+  #rLane { flex: none; width: var(--laneW, 220px); max-width: 100%; height: 60px; }
+  .rbtns { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-height: 64px; }
   .rbtns button { font-size: 18px; font-weight: 700; touch-action: none; border-radius: 10px; }
   footer { padding: 0 20px 24px; color: var(--dim); font-size: 13px; }
   kbd { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font: 12px ui-monospace, Consolas, monospace; color: var(--text); }
@@ -97,22 +103,23 @@
   <button class="primary" id="add">+ Ajouter une voiture</button>
   <button class="danger" id="stopAll">Arrêt général (Échap)</button>
   <details id="settings"><summary>Réglages</summary><div class="set">
-  <label class="ctl">V max <input type="range" id="vmax" min="300" max="5000" step="50" value="900"><output id="vmaxO"></output></label>
+  <button id="setClose" class="primary">Retour à la télécommande</button>
+  <label class="ctl">V max <input type="range" id="vmax" min="300" max="5000" step="50" value="2000"><output id="vmaxO"></output></label>
   <label class="ctl">Accél. <input type="range" id="acc" min="300" max="5000" step="100" value="1500"><output id="accO"></output></label>
-  <label class="ctl">Décél. <input type="range" id="dec" min="200" max="5000" step="100" value="800"><output id="decO"></output></label>
-  <label class="ctl">Frein <input type="range" id="brk" min="500" max="10000" step="250" value="5000"><output id="brkO"></output></label>
+  <label class="ctl">Décél. <input type="range" id="dec" min="200" max="5000" step="100" value="2000"><output id="decO"></output></label>
+  <label class="ctl">Frein <input type="range" id="brk" min="500" max="10000" step="250" value="3000"><output id="brkO"></output></label>
   <label class="ctl">Boost <input type="range" id="boost" min="0" max="200" step="10" value="50"><output id="boostO"></output></label>
   <label class="ctl">Lignes de départ <select id="nStart"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
   <button id="bots">Lancer les bots</button>
   <label class="ctl">Virage bots <input type="range" id="botCurve" min="200" max="1500" step="50" value="500"><output id="botCurveO"></output></label>
-  <label class="ctl">V balai <input type="range" id="swSpeed" min="300" max="600" step="25" value="325"><output id="swSpeedO"></output></label>
+  <label class="ctl">V balai <input type="range" id="swSpeed" min="300" max="600" step="25" value="550"><output id="swSpeedO"></output></label>
   <label class="ctl">Voie balai <input type="range" id="swLane" min="10" max="45" step="1" value="25"><output id="swLaneO"></output></label>
   <button id="diagLat">Diagnostic latéral</button>
-  <label class="ctl">Centre balai <input type="range" id="swTrim" min="-30" max="30" step="1" value="0"><output id="swTrimO"></output></label>
   <label class="ctl">Tours balai <select id="swLaps"><option>1</option><option selected>2</option><option>3</option><option>4</option><option>5</option></select></label>
   <label class="ctl">V min <input type="range" id="vmin" min="0" max="500" step="25" value="200"><output id="vminO"></output></label>
   <label class="ctl">Course gaz <input type="range" id="thrTravel" min="30" max="100" step="5" value="65"><output id="thrTravelO"></output></label>
-  <label class="ctl">Course voie <input type="range" id="laneTravel" min="10" max="150" step="5" value="30"><output id="laneTravelO"></output></label>
+  <label class="ctl">Vitesse direction <input type="range" id="laneRate" min="40" max="300" step="10" value="140"><output id="laneRateO"></output></label>
+  <label class="ctl">Largeur direction <input type="range" id="laneTravel" min="120" max="420" step="10" value="220"><output id="laneTravelO"></output></label>
   <label class="ctl"><input type="checkbox" id="snd"> Son moteur</label>
   <label class="ctl">Son perso <input type="file" id="sndFile" accept="audio/*" style="max-width:190px"></label>
   <label class="ctl">Montée de <input type="number" class="sec" id="s0" step="0.1" value="3.5"> à <input type="number" class="sec" id="s1" step="0.1" value="8.8"> s</label>
@@ -135,11 +142,12 @@
     <label class="ctl"><input type="checkbox" id="rSnd"> Son</label>
     <button id="rUturn">Demi-tour</button>
     <button class="danger" id="rStop">STOP</button>
+    <button id="rSet">Réglages</button>
     <button id="rClose">Fermer</button>
   </div>
   <div class="zones">
     <div class="lcol">
-      <div class="zone" id="rLane"><small>Voie : poser le pouce n'importe où et glisser</small><span id="rLaneThumb"></span></div>
+      <div class="lanewrap"><div class="zone" id="rLane"><span id="rLaneThumb"></span><span id="rLanePos"></span></div></div>
       <div class="rbtns"><button class="danger" id="rBrake">FREIN</button><button class="primary" id="rBoost">BOOST</button></div>
     </div>
     <div class="zone" id="rThr"><small>Gaz</small><i id="rThrFill"></i><span id="rThrVal">0</span></div>
@@ -604,14 +612,16 @@ function bindRange(id, unit) {
   const up = () => { o.textContent = i.value + ' ' + unit; };
   i.addEventListener('input', up); up();
 }
-['swTrim', 'swLaps', 'swLane'].forEach(id => {     // réglages balai mémorisés sur l'appareil
+['swLaps', 'swLane'].forEach(id => {     // réglages balai mémorisés sur l'appareil
   const v = store.get('anki-' + id); if (v !== null) $('#' + id).value = v;
   $('#' + id).addEventListener('change', e => store.set('anki-' + id, e.target.value));
 });
-bindRange('vmax', 'mm/s'); bindRange('acc', 'mm/s²'); bindRange('dec', 'mm/s²'); bindRange('brk', 'mm/s²'); bindRange('boost', '% en plus'); bindRange('botCurve', 'mm/s'); bindRange('swSpeed', 'mm/s'); bindRange('swTrim', 'mm'); bindRange('swLane', 'mm du centre'); bindRange('vmin', 'mm/s'); bindRange('thrTravel', '% de la zone'); bindRange('laneTravel', 'px par côté');
+bindRange('vmax', 'mm/s'); bindRange('acc', 'mm/s²'); bindRange('dec', 'mm/s²'); bindRange('brk', 'mm/s²'); bindRange('boost', '% en plus'); bindRange('botCurve', 'mm/s'); bindRange('swSpeed', 'mm/s'); bindRange('swLane', 'mm du centre'); bindRange('vmin', 'mm/s'); bindRange('thrTravel', '% de la zone'); bindRange('laneTravel', 'px'); bindRange('laneRate', 'mm/s à fond');
+{ const lw = $('#laneTravel'), v = store.get('anki-laneW'); if (v !== null) { lw.value = v; lw.dispatchEvent(new Event('input')); }
+  const up = () => { $('#rLane').style.setProperty('--laneW', lw.value + 'px'); store.set('anki-laneW', lw.value); }; lw.addEventListener('input', up); up(); }
 
 // --- Télécommande tactile ---------------------------------------------------
-const R = { car: null, wake: null };
+const R = { car: null, wake: null, stick: 0 };
 // Gaz -> consigne : dès que les gaz sont ouverts la consigne part de « V min » (en dessous la voiture
 // ne bouge pas), puis monte linéairement jusqu'à V max. Toute la course est donc utile.
 function thrToSpeed(f, vmax) {
@@ -625,21 +635,30 @@ function setThr(f) {
   $('#rThrVal').textContent = v + ' mm/s';
   if (R.car) R.car.kSpeed = v;
 }
-function setLane(f) {
-  R.lane = f;
-  $('#rLaneThumb').style.left = (50 + f * 44) + '%';
-  if (R.car) R.car.kOffset = f * HALF_TRACK_MM * (R.car.invert ? -1 : 1);
+// Direction façon stick : la position du pouce règle la vitesse de déplacement latéral, pas la position.
+// Relâcher ramène le stick au centre et la voiture reste là où elle est.
+function setStick(d) {
+  R.stick = Math.abs(d) < 0.08 ? 0 : d;
+  $('#rLaneThumb').style.left = 'calc(50% + ' + d.toFixed(3) + ' * (50% - 22px))';
+}
+function stickTick() {
+  const c = R.car; if (!c) return;
+  if (R.stick) {
+    const v = Math.sign(R.stick) * Math.pow(Math.abs(R.stick), 1.5) * Number($('#laneRate').value);     // mm/s, progressif
+    c.kOffset = clamp(c.kOffset + v * TICK_MS / 1000 * (c.invert ? -1 : 1), -HALF_TRACK_MM, HALF_TRACK_MM);
+  }
+  $('#rLanePos').style.left = 'calc(50% + ' + (c.kOffset / HALF_TRACK_MM * (c.invert ? -1 : 1)).toFixed(3) + ' * (50% - 8px))';   // position visée sur la piste
 }
 async function openRemote(car) {
   select(car); R.car = car;
   $('#rName').textContent = car.label;
   $('#remote').hidden = false;
-  setThr(0); setLane(clamp(car.kOffset / HALF_TRACK_MM, -1, 1) * (car.invert ? -1 : 1));
+  setThr(0); setStick(0);
   try { if (navigator.wakeLock) R.wake = await navigator.wakeLock.request('screen'); } catch (e) { /* écran non maintenu */ }
 }
 function closeRemote() {
   if (R.car) { R.car.stop(); R.car.tBrake = 0; R.car.tBoost = false; }
-  R.car = null; $('#remote').hidden = true;
+  R.car = null; $('#remote').hidden = true; document.body.classList.remove('setover');
   if (R.wake) { R.wake.release().catch(() => {}); R.wake = null; }
 }
 function bindZone(el, move, end) {
@@ -650,14 +669,14 @@ function bindZone(el, move, end) {
 bindZone($('#rThr'), (e, r) => setThr(clamp((r.bottom - e.clientY) / (r.height * Number($('#thrTravel').value) / 100), 0, 1)),
   () => { if (!$('#rHold').checked) setThr(0); });
 // Voie : déplacement relatif au point où le pouce se pose, pleine largeur de piste en « Course voie » pixels par côté
-let laneRef = null;
-bindZone($('#rLane'), e => {
-  if (!laneRef || laneRef.id !== e.pointerId) laneRef = { id: e.pointerId, x: e.clientX, f: R.lane || 0 };
-  setLane(clamp(laneRef.f + (e.clientX - laneRef.x) / Number($('#laneTravel').value), -1, 1));
-}, () => { laneRef = null; });
+// Direction : petit stick horizontal (voir setStick)
+bindZone($('#rLane'), (e, r) => setStick(clamp((e.clientX - r.left - r.width / 2) / (r.width / 2 - 22), -1, 1)), () => setStick(0));
 $('#rStop').addEventListener('click', () => { setThr(0); if (R.car) R.car.stop(); });
 $('#rUturn').addEventListener('click', () => { if (R.car) R.car.uTurn(); });
 $('#rClose').addEventListener('click', closeRemote);
+// Réglages par-dessus la télécommande, sans la fermer (les gaz sont coupés pendant ce temps)
+$('#rSet').addEventListener('click', () => { setThr(0); setStick(0); $('#settings').open = true; document.body.classList.add('setover'); });
+$('#setClose').addEventListener('click', () => document.body.classList.remove('setover'));
 function bindHold(el, fn) {
   el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); fn(true); e.preventDefault(); });
   ['pointerup', 'pointercancel'].forEach(t => el.addEventListener(t, () => fn(false)));
@@ -674,42 +693,59 @@ $('#rHold').addEventListener('change', e => { if (!e.target.checked) setThr(0); 
 // accélération, modulation « régénération » au freinage, souffle de roulement, couche turbine au boost,
 // et bourdonnement discret à l'arrêt. Piloté par la vitesse estimée de la voiture.
 const SND = { on: false, ctx: null, E: null, S: null };
-const RATIOS = [1, 1.498, 2.005, 4.02];
 function buildEngine(ctx) {
-  const out = ctx.createGain(); out.gain.value = 0;
-  const comp = ctx.createDynamicsCompressor(); out.connect(comp); comp.connect(ctx.destination);
-  const osc = (type, gain, dest) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = type; g.gain.value = gain; o.connect(g); g.connect(dest); o.start(); return { o, g }; };
-  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900; lp.Q.value = 0.8;
-  const whine = ctx.createGain(); whine.gain.value = 0; lp.connect(whine); whine.connect(out);
-  const parts = [osc('sine', 0.5, lp), osc('triangle', 0.3, lp), osc('sawtooth', 0.1, lp), osc('sine', 0.08, lp)];
-  const lfo = ctx.createOscillator(), lfoG = ctx.createGain(); lfo.frequency.value = 5.3; lfoG.gain.value = 6;   // vibrato en cents
-  lfo.connect(lfoG); parts.forEach(q => lfoG.connect(q.o.detune)); lfo.start();
-  const sub = osc('sine', 0, out);
+  // bus -> saturation douce (harmoniques sous charge) -> voie directe + chorus court (épaisseur) -> out -> compresseur
+  const bus = ctx.createGain(), ws = ctx.createWaveShaper(), out = ctx.createGain(), comp = ctx.createDynamicsCompressor();
+  const curve = new Float32Array(1025); for (let k = 0; k < 1025; k++) curve[k] = Math.tanh(1.6 * (k / 512 - 1));
+  ws.curve = curve; ws.oversample = '2x'; out.gain.value = 0;
+  const dl = ctx.createDelay(0.05), dg = ctx.createGain(); dl.delayTime.value = 0.017; dg.gain.value = 0.5;
+  const lfo2 = ctx.createOscillator(), l2g = ctx.createGain(); lfo2.frequency.value = 0.37; l2g.gain.value = 0.004; lfo2.connect(l2g); l2g.connect(dl.delayTime); lfo2.start();
+  bus.connect(ws); ws.connect(out); ws.connect(dl); dl.connect(dg); dg.connect(out); out.connect(comp); comp.connect(ctx.destination);
+  const osc = (type, gain, dest, detune) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = type; o.detune.value = detune || 0; g.gain.value = gain; o.connect(g); g.connect(dest); o.start(); return { o, g }; };
+  // A. moteur : trois dents de scie légèrement désaccordées dans un filtre résonant qui suit le régime
+  const lpA = ctx.createBiquadFilter(); lpA.type = 'lowpass'; lpA.Q.value = 3; lpA.frequency.value = 400;
+  const gA = ctx.createGain(); gA.gain.value = 0; lpA.connect(gA); gA.connect(bus);
+  const parts = [osc('sawtooth', 0.3, lpA, -9), osc('sawtooth', 0.3, lpA, 0), osc('sawtooth', 0.3, lpA, 9)];
+  // B. onduleur : sifflement aigu en modulation de fréquence, dont le timbre s'enrichit à l'accélération
+  const car = ctx.createOscillator(), mod = ctx.createOscillator(), dev = ctx.createGain(), gB = ctx.createGain();
+  dev.gain.value = 0; gB.gain.value = 0; mod.connect(dev); dev.connect(car.frequency); car.connect(gB); gB.connect(bus); car.start(); mod.start();
+  // C. corps : octave grave carrée et filtrée, qui donne du grondement
+  const lpC = ctx.createBiquadFilter(); lpC.type = 'lowpass'; lpC.frequency.value = 600; lpC.Q.value = 0.7;
+  const gC = ctx.createGain(); gC.gain.value = 0; lpC.connect(gC); gC.connect(bus);
+  const body = osc('square', 0.6, lpC), body2 = osc('triangle', 0.5, lpC);
+  // vibrato commun (roucoulement à la régénération)
+  const lfo = ctx.createOscillator(), lfoG = ctx.createGain(); lfo.frequency.value = 5.3; lfoG.gain.value = 5;
+  lfo.connect(lfoG); parts.forEach(q => lfoG.connect(q.o.detune)); lfoG.connect(car.detune); lfo.start();
+  // D. souffle de roulement, E. turbine du boost
   const nb = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = nb.getChannelData(0);
   for (let k = 0; k < d.length; k++) d[k] = Math.random() * 2 - 1;
   const noise = ctx.createBufferSource(); noise.buffer = nb; noise.loop = true;
   const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.2; bp.frequency.value = 600;
-  const nlp = ctx.createBiquadFilter(); nlp.type = 'lowpass'; nlp.frequency.value = 3200;   // coupe le sifflement aigu du bruit
+  const nlp = ctx.createBiquadFilter(); nlp.type = 'lowpass'; nlp.frequency.value = 3200;
   const ng = ctx.createGain(); ng.gain.value = 0; noise.connect(bp); bp.connect(nlp); nlp.connect(ng); ng.connect(out); noise.start();
   const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1800;
   const bg = ctx.createGain(); bg.gain.value = 0; hp.connect(bg); bg.connect(out);
   const turbo = osc('sawtooth', 0.5, hp);
-  return { out, lp, whine, parts, lfo, lfoG, sub, bp, ng, bg, turbo };
+  return { out, parts, lpA, gA, car, mod, dev, gB, lpC, gC, body, body2, lfo, lfoG, bp, ng, bg, turbo };
 }
-// est : vitesse estimée, target : consigne, top : vitesse de référence (V max), t : instant audio
+// est : vitesse estimée, target : consigne, top : vitesse de référence, t : instant audio
 function engineUpdate(E, est, target, top, boost, t) {
   const T = 0.06, set = (prm, v, tau) => prm.setTargetAtTime(v, t, tau || T);
   const x = clamp((0.6 * est + 0.4 * target) / top, 0, 1.6);   // suit la vitesse, avec une part immédiate de la consigne
   const moving = est > 3 || target > 3;
   const torque = clamp((target - est) / 300, -1, 1), accel = Math.max(0, torque), regen = Math.max(0, -torque);
-  const f1 = 220 * Math.pow(2, 2.0 * x);                         // 220 Hz à l'arrêt, 880 Hz à V max, montée continue
-  E.parts.forEach((q, k) => set(q.o.frequency, f1 * RATIOS[k]));
-  set(E.lp.frequency, moving ? 800 + 3200 * x + 2500 * accel : 600);
-  set(E.whine.gain, moving ? (0.1 + 0.22 * Math.min(x, 1)) * (0.5 + 0.8 * accel + 0.3 * regen) : 0.03, 0.09);
-  set(E.lfo.frequency, 5.3 + 22 * regen); set(E.lfoG.gain, 6 + 28 * regen);   // roucoulement de régénération
-  set(E.sub.o.frequency, f1 / 4); set(E.sub.g.gain, moving ? 0.03 * x + 0.06 * accel : 0.02);
-  set(E.bp.frequency, 500 + 2600 * Math.min(x, 1.3)); set(E.ng.gain, 0.09 * x * x + (boost ? 0.05 : 0), 0.12);
-  set(E.turbo.o.frequency, f1 * 3.01); set(E.bg.gain, boost && moving ? 0.1 : 0, 0.1);
+  const f1 = 110 * Math.pow(2, 2.0 * x);                         // 110 Hz à l'arrêt, 440 Hz en haut des gaz, montée continue
+  E.parts.forEach(q => set(q.o.frequency, f1));
+  set(E.lpA.frequency, Math.min(9000, f1 * (2.5 + 2 * x + 6 * accel)));
+  set(E.gA.gain, moving ? (0.3 + 0.3 * Math.min(x, 1)) * (0.55 + 0.6 * accel + 0.2 * regen) : 0.1, 0.09);
+  set(E.car.frequency, f1 * 4); set(E.mod.frequency, f1 * 2);
+  set(E.dev.gain, f1 * 4 * (0.1 + 0.25 * x + 0.9 * accel));
+  set(E.gB.gain, moving ? (0.04 + 0.13 * Math.min(x, 1.3)) * (0.5 + 0.7 * accel) : 0, 0.09);
+  set(E.body.o.frequency, f1 / 2); set(E.body2.o.frequency, f1);
+  set(E.lpC.frequency, 450 + 700 * x + 500 * accel); set(E.gC.gain, moving ? 0.12 + 0.3 * accel + 0.08 * regen : 0.06);
+  set(E.lfo.frequency, 5.3 + 20 * regen); set(E.lfoG.gain, 5 + 24 * regen);
+  set(E.bp.frequency, 500 + 2600 * Math.min(x, 1.3)); set(E.ng.gain, 0.07 * x * x + (boost ? 0.05 : 0), 0.12);
+  set(E.turbo.o.frequency, f1 * 6.02); set(E.bg.gain, boost && moving ? 0.07 : 0, 0.1);
 }
 // --- Son perso : fichier audio choisi par l'utilisateur, rejoué par synthèse granulaire -----------------
 // Le fichier reste sur l'appareil (mémorisé dans le navigateur), il n'est pas publié avec la page.
@@ -802,7 +838,7 @@ function engineTick(vmax) {
   // Vitesses ramenées à la course des gaz : V min -> 12 %, V max -> 100 % (le boost dépasse), quel que soit le réglage.
   const vmin = Math.min(Number($('#vmin').value), vmax - 1);
   const norm = v => v <= 0 ? 0 : top * (0.12 + 0.88 * clamp((v - vmin) / (vmax - vmin), 0, 1.7));
-  SND.E.out.gain.setTargetAtTime(live && !SND.S ? 0.9 : 0, t, 0.1);
+  SND.E.out.gain.setTargetAtTime(live && !SND.S ? 0.7 : 0, t, 0.1);
   if (SND.S) SND.S.out.gain.setTargetAtTime(live ? 0.9 : 0, t, 0.1);
   if (!live) return;
   if (SND.S) sampleUpdate(SND.S, sampleCfg(SND.S.buf), norm(c.est), norm(c.sentSpeed), top, c.boostF > 1, t);
@@ -877,6 +913,7 @@ function setBots(on) {
   if (!on) for (const c of cars) { c.laneHold = false; if (c.bot) c.kSpeed = 0; }
   if (on) for (const c of cars) if (c.bot && c.bot.sweep) {
     c.sw = { base: null, phase: -1, done: false, measured: false }; c.codeOff = null; c.biasOK = false;   // le camion a pu être déplacé à la main
+    log(c.label, 'BALAI réglages : voies à ±' + $('#swLane').value + ' mm de l\'axe, ' + $('#swLaps').value + ' tours, ' + $('#swSpeed').value + ' mm/s');
     c.lapStart = null; c.cur = []; c.crossings = 0; c.sinceStart = false; c.f.cur.textContent = '–';
   }
 }
@@ -947,7 +984,7 @@ function runSweeper(c) {
     status(c.label + ' : balayage ' + voie + ', ' + txt + '…');
     log(c.label, 'BALAI ' + voie + ', ' + txt + (c.repOff === null ? '' : ' (position mesurée ' + Math.round(c.repOff) + ' mm)'));
   }
-  c.kOffset = (side * Number($('#swLane').value) + Number($('#swTrim').value)) * (c.invert ? -1 : 1);
+  c.kOffset = side * Number($('#swLane').value);
   c.kSpeed = Number($('#swSpeed').value);
 }
 function runBots(vmax) {
@@ -976,6 +1013,7 @@ setInterval(() => {
     c.est = c.connected ? c.est + clamp(c.sentSpeed - c.est, -step, step) : 0;
   }
   engineTick(vmax);
+  stickTick();
   for (const c of cars) c.apply(Math.min(c.kSpeed, vmax) * (c.boostF || 1), c.kOffset);
   const tNow = performance.now();
   for (const c of cars) if (c.lapStart != null && c.connected) c.f.cur.textContent = ((tNow - c.lapStart) / 1000).toFixed(1) + ' s';
