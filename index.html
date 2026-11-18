@@ -95,6 +95,39 @@
   kbd { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font: 12px ui-monospace, Consolas, monospace; color: var(--text); }
   details { margin-top: 12px; }
   #log { margin: 8px 0 0; padding: 10px; background: var(--panel); border-radius: 6px; max-height: 220px; overflow: auto; font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; }
+  .name { border-bottom: 1px dashed var(--line); cursor: text; }
+  .pen { color: var(--dim); font-size: 13px; cursor: pointer; }
+  #rName { cursor: pointer; border-bottom: 1px dashed var(--line); }
+  /* Écran circuit */
+  #cv { position: fixed; inset: 0; z-index: 30; background: #0e1014; display: grid; grid-template-columns: 1fr minmax(360px, 36%); grid-template-rows: auto minmax(0, 1fr); }
+  #cv[hidden] { display: none; }
+  .cvtop { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  .cvtop b { font-size: 17px; letter-spacing: .04em; text-transform: uppercase; }
+  #cvInfo { color: var(--dim); font-size: 13px; }
+  #cvInfo .w { color: var(--bad); }
+  .cvmap { position: relative; min-height: 0; }
+  #cvCanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #cvMsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 40px; color: var(--dim); font-size: clamp(16px, 2vw, 26px); pointer-events: none; }
+  #cvBoard { padding: 14px 16px; overflow: auto; border-left: 1px solid var(--line); }
+  table.board { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: clamp(15px, 1.45vw, 30px); }
+  .board th, .board td { padding: .3em .3em; text-align: right; white-space: nowrap; }
+  .board th { color: var(--dim); font-weight: 500; font-size: .5em; text-transform: uppercase; letter-spacing: .06em; }
+  .board td.n { text-align: left; font-weight: 600; overflow: hidden; text-overflow: ellipsis; max-width: 7em; }
+  .board td.p { color: var(--dim); text-align: left; }
+  .board tr + tr td { border-top: 1px solid var(--line); }
+  .board .sw { display: inline-block; width: .65em; height: .65em; border-radius: 50%; margin-right: .4em; vertical-align: .02em; }
+  .board tr.off td { opacity: .4; }
+  .board .best { color: #c77dff; font-weight: 700; }
+  .board td.cur { color: var(--dim); }
+  #cvBest { margin-top: 18px; color: var(--dim); font-size: clamp(14px, 1.3vw, 22px); }
+  #cvBest b { color: #c77dff; }
+  body.cvonly > *:not(#cv):not(script) { display: none !important; }
+  @media (max-height: 520px) {
+    .cvtop { padding: 4px 8px; gap: 4px 6px; } .cvtop b { font-size: 13px; } .cvtop button { padding: 4px 8px; font-size: 12px; }
+    #cvInfo { display: none; } #cv { grid-template-columns: 1fr minmax(230px, 38%); } #cvBoard { padding: 6px 8px; }
+    table.board { font-size: 14px; } #cvBest { margin-top: 8px; font-size: 13px; }
+  }
+  @media (max-width: 800px) and (orientation: portrait) { #cv { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr) auto; } #cvBoard { border-left: 0; border-top: 1px solid var(--line); max-height: 38vh; } }
 </style>
 </head>
 <body>
@@ -102,6 +135,8 @@
   <h1>Anki <span>Pilote</span></h1>
   <button class="primary" id="add">+ Ajouter une voiture</button>
   <button class="danger" id="stopAll">Arrêt général (Échap)</button>
+  <button id="reconAll" hidden>Reconnecter tout</button>
+  <button id="cvOpen">Écran circuit</button>
   <details id="settings"><summary>Réglages</summary><div class="set">
   <button id="setClose" class="primary">Retour à la télécommande</button>
   <label class="ctl">V max <input type="range" id="vmax" min="300" max="5000" step="50" value="2000"><output id="vmaxO"></output></label>
@@ -111,6 +146,7 @@
   <label class="ctl">Boost <input type="range" id="boost" min="0" max="200" step="10" value="50"><output id="boostO"></output></label>
   <label class="ctl">Lignes de départ <select id="nStart"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
   <button id="bots">Lancer les bots</button>
+  <button id="scanTrack" title="La voiture sélectionnée fait un tour lent au centre de la piste">Relever le circuit</button>
   <label class="ctl">Virage bots <input type="range" id="botCurve" min="200" max="1500" step="50" value="500"><output id="botCurveO"></output></label>
   <label class="ctl">V balai <input type="range" id="swSpeed" min="300" max="600" step="25" value="550"><output id="swSpeedO"></output></label>
   <label class="ctl">Voie balai <input type="range" id="swLane" min="10" max="45" step="1" value="25"><output id="swLaneO"></output></label>
@@ -154,6 +190,21 @@
   </div>
 </div>
 
+<div id="cv" hidden>
+  <div class="cvtop">
+    <b>Circuit</b><span id="cvInfo"></span><span class="sp"></span>
+    <button id="cvScan" title="La voiture sélectionnée fait un tour lent au centre de la piste">Relever le circuit</button>
+    <button id="cvMirror" title="Inverse le sens de tous les virages">Miroir</button>
+    <button id="cvReset">Remise à zéro des tours</button>
+    <button id="cvWin" title="Ouvre l'écran circuit dans une fenêtre séparée, à placer sur un second écran">Autre fenêtre</button>
+    <button id="cvFull">Plein écran</button>
+    <button class="danger" id="cvStop">Arrêt général</button>
+    <button id="cvClose">Fermer</button>
+  </div>
+  <div class="cvmap"><canvas id="cvCanvas"></canvas><div id="cvMsg"></div></div>
+  <div id="cvBoard"></div>
+</div>
+
 <footer>
   Clavier (voiture sélectionnée) : <kbd>↑</kbd><kbd>↓</kbd> vitesse · <kbd>←</kbd><kbd>→</kbd> voie · <kbd>Espace</kbd> stop · <kbd>U</kbd> demi-tour · <kbd>1</kbd>…<kbd>9</kbd> choisir la voiture · <kbd>Échap</kbd> arrêt général.<br>Manette (une par voiture, choix sur la carte) : <kbd>stick droit ↑</kbd> vitesse · <kbd>stick droit ↓</kbd> ou <kbd>ZL</kbd> frein · <kbd>ZR</kbd> boost · <kbd>stick gauche</kbd> voie · <kbd>L</kbd> demi-tour · <kbd>bouton du bas</kbd> stop.<br>Bots : choisir « Bot facile / moyen / rapide » ou « Voiture balai » dans le menu d'une carte, puis « Lancer les bots ».
   <details><summary>Journal BLE</summary><button id="copyLog" style="margin-top:8px">Copier le journal</button><div id="log"></div></details>
@@ -193,6 +244,8 @@ const BOT_LEVELS = [
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
+const PALETTE = ['#ff7a1a', '#3ecf8e', '#4da3ff', '#ff5468', '#c77dff', '#ffd23f', '#00d4d4', '#ff8fd0'];
+const SCAN_SPEED = 500;       // vitesse du tour de relevé du circuit (mm/s)
 
 // Trame : [taille][id][charge utile], taille = nombre d'octets qui suivent.
 function frame(id, payloadLen) {
@@ -264,6 +317,10 @@ class Car {
     this.locPrev = null; this.codeOff = null; this.codeT = 0;
     this.sentOffset = 0;
     this.bot = null; this.botJit = 1; this.botNext = 0; this.lapSeq = null; this.curPiece = null;
+    // Circuit : pièces lues avec le sens mesuré des virages, place sur le tracé, couleur d'affichage
+    this.seg = []; this.hist = []; this.mi = null; this.mdir = 1; this.enterT = 0; this.lastSpd = 0; this.lastLap = null; this.trLog = 0;
+    this.color = store.get('anki-color-' + device.id) || PALETTE[cars.length % PALETTE.length];
+    this.padManual = false; this.restored = false;
     this.pad = Math.min(cars.length, 3);   // manette n pour la voiture n par défaut
     this.ps = { thr: 0, lx: 0, dir: 0, l1: false, r1: false, x: false };
     this.sentSpeed = 0; this.sentOffset = 0;
@@ -276,8 +333,8 @@ class Car {
     const el = document.createElement('section');
     el.className = 'car';
     el.innerHTML = `
-      <div class="row"><span class="dot"></span><input class="name" maxlength="24" spellcheck="false">
-        <button data-a="reconnect">Reconnecter</button><button data-a="remove" title="Retirer">✕</button></div>
+      <div class="row"><span class="dot"></span><input class="name" maxlength="24" spellcheck="false" title="Cliquez pour renommer (nom mémorisé sur cet appareil)"><span class="pen" title="Renommer">✎</span>
+        <button data-a="reconnect">Reconnecter</button><button data-a="remove" title="Retirer et oublier cette voiture">✕</button></div>
       <div class="grid">
         <div class="cell"><small>Batterie</small><b data-f="batt">–</b></div>
         <div class="cell"><small>V max mesurée</small><b data-f="vtop">–</b></div>
@@ -302,7 +359,7 @@ class Car {
         <select data-a="pad" title="Manette affectée à cette voiture"></select>
         <label class="ctl"><input type="checkbox" data-a="invert"> Inverser G/D</label>
         <span class="sp"></span>
-        <input type="color" data-a="color" value="#ff7a1a" title="LED moteur">
+        <input type="color" data-a="color" value="#ff7a1a" title="Couleur (écran circuit et LED moteur)">
         <button data-a="remote">Télécommande</button><button data-a="uturn">Demi-tour</button><button data-a="stop">Stop</button>
       </div>`;
     this.el = el;
@@ -313,16 +370,18 @@ class Car {
     this.pos = el.querySelector('.pos');
 
     const name = el.querySelector('.name');
-    name.value = this.label;
-    name.addEventListener('input', () => { this.label = name.value; store.set('anki-label-' + this.device.id, name.value); });
+    name.value = this.label; this.nameEl = name;
+    name.addEventListener('input', () => this.rename(name.value, true));
+    name.addEventListener('change', () => { if (!name.value.trim()) this.rename('Voiture ' + (cars.indexOf(this) + 1)); });
+    el.querySelector('.pen').addEventListener('click', () => { name.focus(); name.select(); });
 
     const on = (a, fn) => el.querySelector('[data-a=' + a + ']').addEventListener('click', fn);
     const padSel = el.querySelector('[data-a=pad]');
     ['Sans manette', 'Manette 1', 'Manette 2', 'Manette 3', 'Manette 4'].forEach((t, i) => padSel.add(new Option(t, String(i - 1))));
     BOT_LEVELS.forEach((l, i) => padSel.add(new Option(l.name, 'b' + i)));
-    padSel.value = String(this.pad);
+    padSel.value = String(this.pad); this.padSel = padSel;
     padSel.addEventListener('change', () => {
-      const v = padSel.value;
+      const v = padSel.value; this.padManual = true;
       this.kSpeed = 0; this.brake = 0; this.boostF = 1; this.laneHold = false;
       if (v[0] === 'b') { this.pad = -1; this.bot = BOT_LEVELS[Number(v[1])]; this.botNext = 0; }
       else { this.pad = Number(v); this.bot = null; }
@@ -335,7 +394,9 @@ class Car {
     el.querySelector('[data-a=stop]').addEventListener('click', () => this.stop());
     el.querySelector('[data-a=reconnect]').addEventListener('click', () => this.connect().catch(e => log(this.label, 'ERREUR ' + e.message)));
     el.querySelector('[data-a=remove]').addEventListener('click', () => removeCar(this));
+    el.querySelector('[data-a=color]').value = this.color;
     el.querySelector('[data-a=color]').addEventListener('change', e => {
+      this.color = e.target.value; store.set('anki-color-' + this.device.id, this.color);   // couleur sur l'écran circuit
       const n = parseInt(e.target.value.slice(1), 16);
       const s = c => Math.round(c / 255 * 14);
       this.send(msg.engineColor(s(n >> 16 & 255), s(n >> 8 & 255), s(n & 255)));
@@ -345,6 +406,11 @@ class Car {
     this.refresh();
   }
 
+  rename(n, fromInput) {
+    this.label = n; store.set('anki-label-' + this.device.id, n);
+    if (!fromInput) this.nameEl.value = n;
+    if (R.car === this) $('#rName').textContent = n;
+  }
   refresh() {
     this.el.classList.toggle('on', this.connected);
     this.el.classList.toggle('off', !this.connected);
@@ -355,6 +421,11 @@ class Car {
     // Jusqu'à 3 tentatives, chaque étape bornée dans le temps : sur Android la connexion GATT
     // peut rester en attente indéfiniment ou échouer au premier essai.
     let lastErr;
+    if (this.restored && this.device.watchAdvertisements && !this.device.gatt.connected) {
+      // Voiture retrouvée d'une session précédente : Chrome doit d'abord la « voir » émettre avant de s'y connecter.
+      status(this.label + ' : en attente de la voiture (allumée, hors chargeur)…');
+      try { await waitAdvert(this.device, 8000); } catch (e) { log(this.label, 'pas d\'annonce reçue (' + e.message + '), connexion tentée quand même'); }
+    }
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         status(this.label + ' : connexion (essai ' + attempt + '/3)…');
@@ -382,6 +453,9 @@ class Car {
     }
     status(this.label + ' : connectée.');
     this.connected = true;
+    if (!this.padManual && !this.bot) {     // manette n pour la n-ième voiture connectée
+      this.pad = Math.min(cars.filter(c => c.connected && c !== this).length, 3); this.padSel.value = String(this.pad);
+    }
     this.sentSpeed = 0; this.sentOffset = 0; this.kSpeed = 0; this.kOffset = 0;
     this.resetLaps();
     this.refresh();
@@ -428,6 +502,7 @@ class Car {
     const id = v.getUint8(1);
     if (id === M.POSITION && v.byteLength >= 10) {
       const off = v.getFloat32(4, true), spd = v.getUint16(8, true);
+      this.lastSpd = spd;
       this.f.piece.textContent = v.getUint8(3) + ' / ' + v.getUint8(2);
       this.f.speed.textContent = spd + ' mm/s';
       if (spd > this.vtop) { this.vtop = spd; this.f.vtop.textContent = spd + ' mm/s'; }
@@ -437,6 +512,14 @@ class Car {
     } else if (id === M.TRANSITION && v.byteLength >= 8) {
       this.lastPiece = null;   // nouvelle pièce physique, même si l'identifiant se répète
       this.showPos(v.getFloat32(4, true));
+      // Octets 16 et 17 : distance parcourue par les roues gauche et droite (cm) sur la pièce qu'on quitte.
+      // Roue gauche plus longue = virage à droite. Sert au sens des virages sur le tracé du circuit.
+      if (v.byteLength >= 18 && this.seg.length) {
+        const wl = v.getUint8(16), wr = v.getUint8(17), sg = this.seg[this.seg.length - 1], d = wl - wr;
+        sg.wl = wl; sg.wr = wr;
+        sg.turn = wl + wr < 6 ? null : Math.abs(d) >= 2 && Math.abs(d) >= 0.03 * (wl + wr) ? (d > 0 ? 1 : -1) : 0;
+      }
+      if (this.trLog < 6) { this.trLog++; log(this.label, 'transition ' + hex(v)); }   // pour vérifier le format sur vos voitures
     } else if (id === M.BATT_RSP && v.byteLength >= 4) {
       const mv = v.getUint16(2, true);
       this.f.batt.textContent = (mv / 1000).toFixed(2) + ' V';
@@ -446,6 +529,7 @@ class Car {
       log(this.label, 'firmware 0x' + v.getUint16(2, true).toString(16));
     } else if (id === M.DELOCALIZED) {
       this.f.piece.textContent = 'hors piste';
+      this.mi = null; this.hist = [];
       log(this.label, 'délocalisée');
     } else if (id === 0x2d && v.byteLength >= 6) {
       this.rep2d = v.getFloat32(2, true);          // mise à jour du décalage (non documentée en détail), gardée pour le diagnostic
@@ -457,7 +541,7 @@ class Car {
     this.laps = 0; this.best = null; this.lapStart = null; this.cur = []; this.lastPiece = null; this.vtop = 0;
     this.lapSeq = null; this.curPiece = null; this.crossings = 0; this.sinceStart = false;
     this.f.laps.textContent = '0'; this.f.cur.textContent = '–'; this.f.last.textContent = '–'; this.f.best.textContent = '–';
-    this.f.vtop.textContent = '–';
+    this.f.vtop.textContent = '–'; this.lastLap = null;
     this.f.track.textContent = "en attente d'un passage sur la ligne de départ";
   }
   onPiece(id) {
@@ -482,11 +566,19 @@ class Car {
         this.f.track.textContent = this.cur.length + ' lectures : ' + this.cur.map(p => PIECE_KIND[p] || '?' + p).join(' ');
         log(this.label, 'TOUR ' + this.laps + '  ' + t.toFixed(2) + ' s  pièces ' + this.cur.join(','));
         this.lapSeq = this.cur.slice();               // tracé mémorisé pour l'anticipation des bots
+        this.lastLap = t;
+        onLap(this, this.seg.slice(-this.cur.length));
         this.botJit = 0.95 + Math.random() * 0.1;     // légère variation d'un tour à l'autre
         this.lapStart = now; this.cur = []; this.crossings = 0;
       }
     }
     if (this.lapStart !== null) this.cur.push(id);
+    this.seg.push({ id, turn: null }); if (this.seg.length > 300) this.seg.splice(0, 100);
+    trackPiece(this, id);
+  }
+  resetTimes() {
+    this.laps = 0; this.best = null; this.lastLap = null; this.lapStart = null; this.cur = []; this.crossings = 0; this.sinceStart = false;
+    this.f.laps.textContent = '0'; this.f.cur.textContent = '–'; this.f.last.textContent = '–'; this.f.best.textContent = '–';
   }
   // Position latérale. Constats des essais :
   //  - le décalage remonté par la voiture (off) est sa référence interne : elle part de l'endroit où la voiture a été
@@ -560,7 +652,7 @@ class Car {
   }
   nudgeSpeed(d) { this.kSpeed = clamp(this.kSpeed + d * 50, 0, Number($('#vmax').value)); }
   nudgeLane(d) { this.kOffset = clamp(this.kOffset + d * (this.invert ? -1 : 1) * LANE_STEP_MM, -HALF_TRACK_MM, HALF_TRACK_MM); }
-  stop() { if (this.bot) setBots(false); this.kSpeed = 0; this.sentSpeed = 0; this.sentRamp = Number($('#brk').value); this.send(msg.setSpeed(0, this.sentRamp), 'speed'); }
+  stop() { if (CIR.scan === this) CIR.scan = null; if (this.bot) setBots(false); this.kSpeed = 0; this.sentSpeed = 0; this.sentRamp = Number($('#brk').value); this.send(msg.setSpeed(0, this.sentRamp), 'speed'); }
   uTurn() {
     this.send(msg.uTurn());
     // Sens inversé : le tour en cours et le tracé mémorisé ne sont plus valables
@@ -577,7 +669,7 @@ class Car {
 function select(car) { selected = car; cars.forEach(c => c.refresh()); }
 function removeCar(car) {
   car.stop();
-  setTimeout(() => car.disconnect(), 150);
+  setTimeout(() => car.disconnect().then(() => { if (car.device.forget) car.device.forget().catch(() => {}); }), 150);
   car.el.remove();
   cars.splice(cars.indexOf(car), 1);
   if (selected === car) selected = cars[0] || null;
@@ -598,6 +690,10 @@ $('#add').addEventListener('click', async () => {
     cars.push(car);
     select(car);
     await car.connect();
+    if (store.get('anki-label-' + device.id) === null) {
+      status(car.label + ' connectée. Donnez-lui un nom (champ en haut de sa carte, ou touchez le nom sur la télécommande) : il sera retenu.');
+      if (!TOUCH) { car.nameEl.focus(); car.nameEl.select(); }
+    }
     if (TOUCH) openRemote(car);
   } catch (e) {
     if (e.name === 'NotFoundError') status('Aucune voiture choisie.');
@@ -674,6 +770,12 @@ bindZone($('#rLane'), (e, r) => setStick(clamp((e.clientX - r.left - r.width / 2
 $('#rStop').addEventListener('click', () => { setThr(0); if (R.car) R.car.stop(); });
 $('#rUturn').addEventListener('click', () => { if (R.car) R.car.uTurn(); });
 $('#rClose').addEventListener('click', closeRemote);
+$('#rName').addEventListener('click', () => {
+  const c = R.car; if (!c) return;
+  setThr(0);
+  const n = prompt('Nom de la voiture', c.label);
+  if (n && n.trim()) c.rename(n.trim().slice(0, 24));
+});
 // Réglages par-dessus la télécommande, sans la fermer (les gaz sont coupés pendant ce temps)
 $('#rSet').addEventListener('click', () => { setThr(0); setStick(0); $('#settings').open = true; document.body.classList.add('setover'); });
 $('#setClose').addEventListener('click', () => document.body.classList.remove('setover'));
@@ -848,7 +950,7 @@ function engineTick(vmax) {
 // --- Clavier ----------------------------------------------------------------
 addEventListener('keydown', e => {
   if (e.target.matches('input.name')) return;
-  if (e.key === 'Escape') { stopAll(); return; }
+  if (e.key === 'Escape') { if (CIR.popup) cvCmd('stop'); else stopAll(); return; }
   const c = selected; if (!c) return;
   if (e.key >= '1' && e.key <= '9') { const n = cars[Number(e.key) - 1]; if (n) select(n); return; }
   switch (e.key) {
@@ -1004,10 +1106,374 @@ function runBots(vmax) {
   }
 }
 
+// --- Circuit : relevé du tracé, suivi des voitures, classement -------------------------------------------
+// Tracé = suite des pièces lues pendant un tour complet (les mêmes lectures que le compteur de tours).
+// Sens des virages : trame transition (roues gauche/droite, voir onMessage). Si la voiture ne renseigne pas ces octets,
+// le sens est choisi pour que le circuit se referme (±4 quarts de tour, 0 pour un huit) et se corrige d'un clic.
+// Suivi : chaque voiture avance de pièce en pièce sur le tracé en vérifiant l'identifiant attendu ; perdue, elle est
+// recalée sur ses 4 dernières pièces lues. Dans la pièce, la position est interpolée avec sa vitesse.
+const GEO = { D: 560, V: 280 };            // longueur d'une droite, rayon des virages à l'axe (mm)
+const SEG_LEN = { 34: 340, 33: 220 };      // pièce départ : deux identifiants sur une même pièce droite
+const TRACK_HW = 95;                       // demi-largeur dessinée de la piste (mm)
+const CIR = { map: null, geo: null, scan: null, popup: location.hash === '#circuit', bc: null, peerT: 0, st: null, stT: 0, mapKey: '', view: null, boardT: 0 };
+try { CIR.bc = new BroadcastChannel('anki-circuit'); } catch (e) { /* fenêtre séparée indisponible */ }
+const mod = (a, n) => ((a % n) + n) % n;
+const esc = t => String(t).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+
+function segKind(sg) {
+  const k = PIECE_KIND[sg.id];
+  return k === 'V' || (!k && (sg.turn === 1 || sg.turn === -1)) ? 'V' : 'D';   // pièce inconnue qui tourne = virage
+}
+function closeInfo(m) {
+  const sum = m.segs.reduce((a, sg) => a + (sg.kind === 'V' ? sg.turn : 0), 0);
+  const hasX = m.segs.some(sg => sg.id === 10);
+  return Math.abs(sum) === 4 || (hasX && sum === 0) ? '' : 'le tracé ne se referme pas (' + sum * 90 + '° au lieu de ±360°) : vérifiez « Lignes de départ » ou relevez-le à nouveau.';
+}
+function buildMap(segs, who) {
+  const S = segs.map(sg => ({ id: sg.id, kind: segKind(sg), turn: 0, guess: false }));
+  let known = 0; const unk = [];
+  S.forEach((x, i) => {
+    if (x.kind !== 'V') return;
+    const t = segs[i].turn;
+    if (t === 1 || t === -1) { x.turn = t; known += t; } else unk.push(x);
+  });
+  if (unk.length && unk.length <= 18 && solveTurns(S, unk)) { /* sens trouvé par fermeture géométrique */ }
+  else if (unk.length) {
+    const sg = known >= 0 ? 1 : -1, hasX = S.some(x => x.id === 10);
+    let need = null;
+    for (const T of hasX ? [0, 4 * sg, -4 * sg] : [4 * sg, -4 * sg]) {
+      const k = T - known;
+      if (Math.abs(k) <= unk.length && (unk.length - Math.abs(k)) % 2 === 0) { need = k; break; }
+    }
+    const nRight = need === null ? unk.length : (unk.length + need) / 2;
+    unk.forEach((x, i) => { x.turn = i < nRight ? 1 : -1; x.guess = true; });
+  }
+  const m = { segs: S, who, at: Date.now(), nStart: Number($('#nStart').value) };
+  m.warn = closeInfo(m);
+  return m;
+}
+// Sens des virages non mesurés : on essaie toutes les combinaisons (au plus 2^18) et on garde celle dont le tracé
+// se referme le mieux (position et cap), puis, à égalité, celle qui se chevauche le moins (hors croisement, pièce 10).
+// Un tracé et son miroir sont indiscernables : le bouton « Miroir » les échange.
+function solveTurns(S, unk) {
+  const n = unk.length, DX = [1, 0, -1, 0], DY = [0, 1, 0, -1], idx = unk.map(x => S.indexOf(x));
+  const hasX = S.some(x => x.id === 10);
+  let cands = [], bestE = Infinity;
+  for (let mask = 0; mask < 1 << n; mask++) {
+    let x = 0, y = 0, k = 0, u = 0;
+    for (let i = 0; i < S.length; i++) {
+      const sg = S[i];
+      if (sg.kind === 'V') {
+        const t = u < n && idx[u] === i ? ((mask >> u++) & 1 ? 1 : -1) : sg.turn;
+        const kk = (k + t + 4) % 4;
+        x += GEO.V * (DX[k] + DX[kk]); y += GEO.V * (DY[k] + DY[kk]); k = kk;
+      } else { const L = SEG_LEN[sg.id] || GEO.D; x += L * DX[k]; y += L * DY[k]; }
+    }
+    if (k !== 0) continue;                                        // le cap doit revenir à l'initial
+    const e = Math.hypot(x, y);
+    if (e < bestE - 1) { bestE = e; cands = [mask]; } else if (e <= bestE + 1 && cands.length < 400) cands.push(mask);
+  }
+  if (!cands.length) return false;
+  const pref = S.reduce((a, sg) => a + (sg.kind === 'V' && !unk.includes(sg) ? sg.turn : 0), 0) >= 0 ? 1 : -1;
+  let best = null, bestO = Infinity;
+  for (const mask of cands) {
+    unk.forEach((x, u) => { x.turn = (mask >> u) & 1 ? 1 : -1; });
+    const sum = S.reduce((a, sg) => a + (sg.kind === 'V' ? sg.turn : 0), 0);
+    if (!(Math.abs(sum) === 4 || (hasX && sum === 0))) continue;
+    const g = buildGeo({ segs: S }), P = [];
+    g.segs.forEach((gs, i) => gs.pts.forEach(p => P.push([p.x, p.y, i])));
+    let o = 0;
+    for (let a = 0; a < P.length; a++) for (let b = a + 1; b < P.length; b++) {
+      const ia = P[a][2], ib = P[b][2], dd = Math.min(mod(ia - ib, S.length), mod(ib - ia, S.length));
+      if (dd > 1 && S[ia].id !== 10 && S[ib].id !== 10 && Math.hypot(P[a][0] - P[b][0], P[a][1] - P[b][1]) < 1.8 * TRACK_HW) o++;
+    }
+    const score = o * 10 + (Math.sign(sum) === pref ? 0 : 1);     // à égalité : même sens global que les virages mesurés
+    if (score < bestO) { bestO = score; best = mask; }
+  }
+  if (best === null) return false;
+  unk.forEach((x, u) => { x.turn = (best >> u) & 1 ? 1 : -1; x.guess = true; });
+  return true;
+}
+// Géométrie : repère écran (y vers le bas), cap h en radians, virage à droite = cap croissant.
+// L'écart de fermeture (longueurs approximatives) est réparti le long du tracé.
+function buildGeo(m) {
+  let x = 0, y = 0, h = 0, d = 0;
+  const segs = [];
+  for (const sg of m.segs) {
+    const pts = [{ x, y, h, d }];
+    let len;
+    if (sg.kind === 'V') {
+      const R = GEO.V, t = sg.turn || 1, n = 12;
+      const cx = x - Math.sin(h) * R * t, cy = y + Math.cos(h) * R * t;
+      len = R * Math.PI / 2;
+      for (let k = 1; k <= n; k++) {
+        const hk = h + t * Math.PI / 2 * k / n;
+        pts.push({ x: cx + Math.sin(hk) * R * t, y: cy - Math.cos(hk) * R * t, h: hk, d: d + len * k / n });
+      }
+      h += t * Math.PI / 2;
+    } else {
+      len = SEG_LEN[sg.id] || GEO.D;
+      pts.push({ x: x + Math.cos(h) * len, y: y + Math.sin(h) * len, h, d: d + len });
+    }
+    const e = pts[pts.length - 1]; x = e.x; y = e.y;
+    segs.push({ pts, len, d0: d }); d += len;
+  }
+  const ex = x, ey = y, bb = [1e9, 1e9, -1e9, -1e9];
+  for (const sg of segs) for (const p of sg.pts) {
+    p.x -= ex * p.d / d; p.y -= ey * p.d / d;
+    bb[0] = Math.min(bb[0], p.x); bb[1] = Math.min(bb[1], p.y); bb[2] = Math.max(bb[2], p.x); bb[3] = Math.max(bb[3], p.y);
+  }
+  return { segs, total: d, bbox: bb };
+}
+// Point de la pièce i à la fraction f (sens du relevé), décalé de lat mm (positif = à droite dans le sens du relevé)
+function geoPoint(g, i, f, lat) {
+  const P = g.segs[i].pts, t = clamp(f, 0, 1) * (P.length - 1), k = Math.min(P.length - 2, Math.floor(t)), u = t - k;
+  const a = P[k], b = P[k + 1], h = a.h + (b.h - a.h) * u;
+  return [a.x + (b.x - a.x) * u - Math.sin(h) * lat, a.y + (b.y - a.y) * u + Math.cos(h) * lat, h];
+}
+function setMap(m, why) {
+  CIR.map = m; CIR.geo = m ? buildGeo(m) : null;
+  store.set('anki-circuit', m ? JSON.stringify(m) : '');
+  for (const c of cars) c.mi = null;      // recalage de chaque voiture sur le nouveau tracé
+  if (m && why) log('CIRCUIT', why + ' : ' + m.segs.length + ' pièces  ' + m.segs.map(sg => sg.kind === 'V' ? (sg.turn > 0 ? 'V+' : 'V-') + (sg.guess ? '?' : '') : (PIECE_KIND[sg.id] || sg.id)).join(' ') + (m.warn ? '  — ' + m.warn : ''));
+}
+function onLap(c, segs) {
+  if (CIR.scan === c) {
+    CIR.scan = null; c.kSpeed = 0;
+    setMap(buildMap(segs, c.label), 'relevé par ' + c.label);
+    status('Circuit relevé par ' + c.label + ' : ' + segs.length + ' pièces.' + (CIR.map.warn ? ' Attention, ' + CIR.map.warn : ''), !!CIR.map.warn);
+  } else if (!CIR.map) setMap(buildMap(segs, c.label), 'tracé déduit du tour de ' + c.label);
+}
+function startScan() {
+  const c = selected;
+  if (!c || !c.connected) { status('Relevé : sélectionnez la carte d\'une voiture connectée, posée sur la piste.', true); return; }
+  if (c.bot) { status('Relevé : mettez cette voiture en « Sans manette » ou sur une manette, pas en bot.', true); return; }
+  CIR.scan = c; c.resetTimes(); c.kOffset = 0; c.kSpeed = SCAN_SPEED;
+  status('Relevé : ' + c.label + ' fait un tour lent au centre de la piste, puis s\'arrête. Échap pour annuler.');
+}
+function circuitCmd(cmd, i) {
+  if (cmd === 'scan') startScan();
+  else if (cmd === 'stop') stopAll();
+  else if (cmd === 'reset') { cars.forEach(c => c.resetTimes()); status('Tours et temps remis à zéro : le chrono repart au prochain passage sur la ligne.'); }
+  else if ((cmd === 'flip' || cmd === 'mirror') && CIR.map) {
+    const m = CIR.map;
+    m.segs.forEach((sg, k) => {
+      if (sg.kind !== 'V') return;
+      if (cmd === 'mirror') sg.turn = -sg.turn;
+      else if (k === i) { sg.turn = -sg.turn; sg.guess = false; }
+    });
+    m.warn = closeInfo(m);
+    setMap(m, cmd === 'flip' ? 'virage n° ' + (i + 1) + ' inversé' : 'tracé inversé en miroir');
+  }
+}
+const cvCmd = (cmd, i) => CIR.popup ? CIR.bc && CIR.bc.postMessage({ t: 'cmd', c: cmd, i }) : circuitCmd(cmd, i);
+
+function trackPiece(c, id) {
+  c.enterT = performance.now();
+  c.hist.push(id); if (c.hist.length > 6) c.hist.shift();
+  const m = CIR.map; if (!m) return;
+  const S = m.segs, N = S.length;
+  if (c.mi !== null) for (const d of [c.mdir, -c.mdir]) {
+    const j = mod(c.mi + d, N);
+    if (S[j].id === id) { c.mi = j; c.mdir = d; return; }
+  }
+  const K = Math.min(c.hist.length, 4), cand = [];
+  for (let j = 0; j < N; j++) for (const d of [1, -1]) {
+    let ok = true;
+    for (let k = 0; k < K && ok; k++) ok = S[mod(j - d * k, N)].id === c.hist[c.hist.length - 1 - k];
+    if (ok) cand.push([j, d]);
+  }
+  if (cand.length === 1) [c.mi, c.mdir] = cand[0]; else c.mi = null;
+}
+function latOf(c) {
+  if (c.codeOff !== null && performance.now() - c.codeT < 1500) return c.codeOff;     // mesure sur les codes de la piste
+  return c.repOff === null ? 0 : clamp(c.repOff - c.bias, -HALF_TRACK_MM, HALF_TRACK_MM);
+}
+function circuitState() {
+  const now = performance.now();
+  return { t: 'st', map: CIR.map, scan: CIR.scan ? CIR.scan.label : null, cars: cars.map((c, k) => ({
+    k, name: c.label, color: c.color, on: c.connected, mi: c.mi, dir: c.mdir, age: now - c.enterT, spd: c.lastSpd, lat: latOf(c),
+    laps: c.laps || 0, last: c.lastLap, best: c.best, cur: c.connected && c.lapStart !== null ? (now - c.lapStart) / 1000 : null,
+  })) };
+}
+
+// --- Affichage ----------------------------------------------------------------------------------------------
+function cvShow(on) { $('#cv').hidden = !on; }
+function cvGet() {
+  if (!CIR.popup) return { st: circuitState(), dt: 0, map: CIR.map, geo: CIR.geo };
+  return CIR.st ? { st: CIR.st, dt: performance.now() - CIR.stT, map: CIR.st.map, geo: CIR.geo } : null;
+}
+function tracePath(ctx, g, lat) {
+  ctx.beginPath(); let first = true;
+  for (const sg of g.segs) for (const p of sg.pts) {
+    const x = p.x - Math.sin(p.h) * lat, y = p.y + Math.cos(p.h) * lat;
+    if (first) { ctx.moveTo(x, y); first = false; } else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+function cvDraw() {
+  const cv = $('#cvCanvas'), ctx = cv.getContext('2d'), dpr = devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
+  const s = cvGet(), msgEl = $('#cvMsg');
+  if (!s) { msgEl.textContent = 'En attente de la page de pilotage… Gardez-la ouverte dans ce même navigateur.'; $('#cvInfo').textContent = ''; return; }
+  const { st, dt, map: m, geo: g } = s;
+  const now = performance.now();
+  if (now - CIR.boardT > 250) { CIR.boardT = now; cvBoard(st, dt, g); cvInfo(m, st); }
+  if (CIR.popup && dt > 3000) { msgEl.textContent = 'Plus de nouvelles de la page de pilotage : est-elle fermée ou masquée ?'; return; }
+  if (!m || !g) {
+    msgEl.textContent = st.scan ? 'Relevé en cours : ' + st.scan + ' fait un tour lent…'
+      : 'Aucun tracé pour l\'instant. Il se construit tout seul au premier tour complet d\'une voiture, ou avec « Relever le circuit » : la voiture sélectionnée fait un tour lent au centre de la piste.';
+    CIR.view = null; return;
+  }
+  msgEl.textContent = st.scan ? 'Nouveau relevé en cours : ' + st.scan + '…' : '';
+  // Mise à l'échelle : tout le tracé dans la zone, avec une marge pour la largeur de piste et les noms
+  const pad = TRACK_HW + 90, bw = g.bbox[2] - g.bbox[0] + 2 * pad, bh = g.bbox[3] - g.bbox[1] + 2 * pad;
+  const sc = Math.min(W / bw, H / bh);
+  const ox = (W - (g.bbox[2] - g.bbox[0]) * sc) / 2 - g.bbox[0] * sc, oy = (H - (g.bbox[3] - g.bbox[1]) * sc) / 2 - g.bbox[1] * sc;
+  CIR.view = { sc, ox, oy };
+  ctx.setTransform(dpr * sc, 0, 0, dpr * sc, dpr * ox, dpr * oy);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  tracePath(ctx, g, 0);
+  ctx.strokeStyle = '#3d434f'; ctx.lineWidth = 2 * TRACK_HW + 16; ctx.stroke();
+  ctx.strokeStyle = '#1f232a'; ctx.lineWidth = 2 * TRACK_HW; ctx.stroke();
+  ctx.setLineDash([26, 26]); ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 3;
+  for (const lat of [-34, 0, 34]) { tracePath(ctx, g, lat); ctx.stroke(); }
+  ctx.setLineDash([]);
+  // Virages dont le sens a été déduit et non mesuré
+  m.segs.forEach((sg, i) => {
+    if (!sg.guess) return;
+    const P = g.segs[i].pts;
+    ctx.beginPath(); P.forEach((p, k) => k ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+    ctx.lineCap = 'butt'; ctx.strokeStyle = 'rgba(255,190,40,.16)'; ctx.lineWidth = 2 * TRACK_HW; ctx.stroke(); ctx.lineCap = 'round';
+    const q = P[P.length >> 1];
+    ctx.fillStyle = 'rgba(255,190,40,.9)'; ctx.font = '600 70px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('?', q.x, q.y);
+  });
+  // Lignes de départ : au début de chaque pièce départ
+  m.segs.forEach((sg, i) => {
+    if (!START_PIECES.includes(sg.id) || START_PIECES.includes(m.segs[mod(i - 1, m.segs.length)].id)) return;
+    const p = g.segs[i].pts[0], nx = -Math.sin(p.h), ny = Math.cos(p.h), tx = Math.cos(p.h), ty = Math.sin(p.h), q = 2 * TRACK_HW / 8;
+    for (let r = 0; r < 2; r++) for (let k = 0; k < 8; k++) {
+      const bx = p.x + nx * (-TRACK_HW + k * q) + tx * r * q, by = p.y + ny * (-TRACK_HW + k * q) + ty * r * q;
+      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + nx * q, by + ny * q); ctx.lineTo(bx + nx * q + tx * q, by + ny * q + ty * q); ctx.lineTo(bx + tx * q, by + ty * q);
+      ctx.fillStyle = (r + k) % 2 ? '#e6e8ec' : '#14161a'; ctx.fill();
+    }
+  });
+  // Voitures
+  const rad = Math.max(24, 11 / sc), fs = 15 / sc;
+  for (const c of st.cars) {
+    if (!c.on || c.mi === null || c.mi >= g.segs.length) continue;
+    const f = clamp((c.age + dt) / 1000 * c.spd / g.segs[c.mi].len, 0, 0.98);
+    const [x, y] = geoPoint(g, c.mi, c.dir > 0 ? f : 1 - f, c.lat * c.dir);
+    ctx.beginPath(); ctx.arc(x, y, rad, 0, 2 * Math.PI);
+    ctx.fillStyle = c.color; ctx.fill(); ctx.lineWidth = 3 / sc; ctx.strokeStyle = '#fff'; ctx.stroke();
+    ctx.font = '600 ' + fs + 'px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 4 / sc; ctx.strokeStyle = '#0e1014'; ctx.strokeText(c.name, x + rad + 5 / sc, y);
+    ctx.fillStyle = '#fff'; ctx.fillText(c.name, x + rad + 5 / sc, y);
+  }
+}
+function fmtS(t, n) { return t === null || t === undefined ? '–' : t.toFixed(n === undefined ? 2 : n); }
+function cvBoard(st, dt, g) {
+  const rows = st.cars.filter(c => c.on || c.laps > 0).map(c => {
+    let p = 0;
+    if (g && c.mi !== null && c.mi < g.segs.length) { const sg = g.segs[c.mi]; p = c.dir > 0 ? sg.d0 : g.total - sg.d0 - sg.len; }
+    return Object.assign({ prog: c.laps * 1e7 + p }, c);
+  }).sort((a, b) => b.prog - a.prog);
+  const bests = rows.filter(c => c.best !== null);
+  const top = bests.length ? bests.reduce((a, b) => (b.best < a.best ? b : a)) : null;
+  let h = '<table class="board"><tr><th></th><th style="text-align:left">Voiture</th><th>Tours</th><th>Dernier</th><th>Meilleur</th><th>En cours</th></tr>';
+  rows.forEach((c, i) => {
+    h += '<tr class="' + (c.on ? '' : 'off') + '"><td class="p">' + (i + 1) + '</td><td class="n"><span class="sw" style="background:' + esc(c.color) + '"></span>' + esc(c.name) +
+      '</td><td>' + c.laps + '</td><td>' + fmtS(c.last) + '</td><td class="' + (top && c.best === top.best ? 'best' : '') + '">' + fmtS(c.best) +
+      '</td><td class="cur">' + (c.cur === null ? '–' : fmtS(c.cur + dt / 1000, 1)) + '</td></tr>';
+  });
+  if (!rows.length) h += '<tr><td colspan="6" style="text-align:left;color:var(--dim)">Aucune voiture connectée.</td></tr>';
+  h += '</table>';
+  if (top) h += '<div id="cvBest">Meilleur tour : <b>' + fmtS(top.best) + ' s</b> — ' + esc(top.name) + '</div>';
+  $('#cvBoard').innerHTML = h;
+}
+function cvInfo(m, st) {
+  const el = $('#cvInfo');
+  if (!m) { el.textContent = ''; return; }
+  const nG = m.segs.filter(sg => sg.guess).length;
+  el.innerHTML = m.segs.length + ' pièces · relevé ' + (m.who ? 'par ' + esc(m.who) + ' ' : '') + 'le ' + new Date(m.at).toLocaleDateString() +
+    (nG ? ' · ' + nG + ' virage' + (nG > 1 ? 's' : '') + ' au sens déduit (?) : cliquez sur un virage pour l\'inverser' : ' · cliquez sur un virage pour inverser son sens') +
+    (m.warn ? ' · <span class="w">' + esc(m.warn) + '</span>' : '');
+}
+$('#cvCanvas').addEventListener('click', e => {
+  const s = cvGet(), v = CIR.view; if (!s || !v || !s.map || !s.geo) return;
+  const r = e.target.getBoundingClientRect(), x = (e.clientX - r.left - v.ox) / v.sc, y = (e.clientY - r.top - v.oy) / v.sc;
+  let best = -1, bd = 1e9;
+  s.geo.segs.forEach((sg, i) => {
+    if (s.map.segs[i].kind !== 'V') return;
+    const p = sg.pts[sg.pts.length >> 1], dd = Math.hypot(p.x - x, p.y - y);
+    if (dd < bd) { bd = dd; best = i; }
+  });
+  if (best >= 0 && bd < GEO.V) cvCmd('flip', best);
+});
+if (CIR.bc) CIR.bc.onmessage = e => {
+  const d = e.data || {};
+  if (CIR.popup) {
+    if (d.t !== 'st') return;
+    CIR.st = d; CIR.stT = performance.now();
+    const k = JSON.stringify(d.map);
+    if (k !== CIR.mapKey) { CIR.mapKey = k; CIR.geo = d.map ? buildGeo(d.map) : null; }
+  } else if (d.t === 'hb') CIR.peerT = performance.now();
+  else if (d.t === 'cmd') circuitCmd(d.c, d.i);
+};
+$('#cvOpen').addEventListener('click', () => cvShow(true));
+$('#cvClose').addEventListener('click', () => { if (CIR.popup) window.close(); else cvShow(false); });
+$('#cvScan').addEventListener('click', () => cvCmd('scan'));
+$('#scanTrack').addEventListener('click', () => circuitCmd('scan'));
+$('#cvMirror').addEventListener('click', () => cvCmd('mirror'));
+$('#cvReset').addEventListener('click', () => cvCmd('reset'));
+$('#cvStop').addEventListener('click', () => cvCmd('stop'));
+$('#cvFull').addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {});
+});
+$('#cvWin').addEventListener('click', () => {
+  if (!CIR.bc) { status('Fenêtre séparée impossible sur ce navigateur.', true); return; }
+  const w = window.open(location.href.split('#')[0] + '#circuit', 'anki-circuit', 'popup=yes,width=1280,height=760');
+  if (!w) { status('Le navigateur a bloqué la fenêtre : autorisez les fenêtres pop-up pour cette page.', true); return; }
+  cvShow(false);
+});
+(function cvLoop() { if (!$('#cv').hidden) cvDraw(); requestAnimationFrame(cvLoop); })();
+
+// --- Voitures déjà autorisées : retrouvées avec leur nom, sans repasser par la liste de Chrome --------------------
+async function waitAdvert(dev, ms) {
+  const ac = new AbortController();
+  try {
+    const got = new Promise(r => dev.addEventListener('advertisementreceived', r, { once: true }));
+    await dev.watchAdvertisements({ signal: ac.signal });
+    await withTimeout(got, ms, 'annonce de la voiture');
+  } finally { ac.abort(); }
+}
+async function restoreKnown() {
+  if (!navigator.bluetooth || !navigator.bluetooth.getDevices) return;
+  let devs = [];
+  try { devs = await navigator.bluetooth.getDevices(); } catch (e) { return; }
+  devs = devs.filter(d => !cars.find(c => c.device.id === d.id));
+  if (!devs.length) return;
+  const empty = $('#cars .empty'); if (empty) empty.remove();
+  for (const d of devs) { const c = new Car(d); c.restored = true; cars.push(c); }
+  if (!selected) select(cars[0]);
+  $('#reconAll').hidden = false;
+  status(devs.length + ' voiture' + (devs.length > 1 ? 's' : '') + ' déjà connue' + (devs.length > 1 ? 's' : '') + ' : allumez-les puis « Reconnecter » sur leur carte, ou « Reconnecter tout ».');
+}
+$('#reconAll').addEventListener('click', async () => {
+  for (const c of cars) if (!c.connected) { try { await c.connect(); } catch (e) { /* message déjà affiché */ } }
+});
+
 setInterval(() => {
   const vmax = Number($('#vmax').value);
   readPads(vmax);
   runBots(vmax);
+  if (CIR.scan) {             // tour de relevé : vitesse lente, centre de la piste
+    if (!CIR.scan.connected) CIR.scan = null; else { CIR.scan.kSpeed = SCAN_SPEED; CIR.scan.kOffset = 0; }
+  }
+  if (CIR.bc && !CIR.popup && performance.now() - CIR.peerT < 3000) CIR.bc.postMessage(circuitState());
   for (const c of cars) {     // vitesse estimée : la consigne suivie avec la rampe envoyée
     const step = (c.sentRamp || 1000) * TICK_MS / 1000;
     c.est = c.connected ? c.est + clamp(c.sentSpeed - c.est, -step, step) : 0;
@@ -1040,6 +1506,17 @@ if (!navigator.bluetooth) {
   w.style.display = 'block';
   w.textContent = 'Web Bluetooth indisponible. Il faut Chrome (PC ou Android) et une page servie en https:// ou depuis localhost.';
   $('#add').disabled = true;
+}
+
+// Démarrage : tracé mémorisé, voitures connues ; ou mode « écran circuit seul » dans une fenêtre séparée
+if (CIR.popup) {
+  document.body.classList.add('cvonly'); document.title = 'Anki — Circuit';
+  $('#cvWin').hidden = true; $('#cvScan').title = 'Lance le relevé depuis la page de pilotage';
+  cvShow(true);
+  if (CIR.bc) { CIR.bc.postMessage({ t: 'hb' }); setInterval(() => CIR.bc.postMessage({ t: 'hb' }), 1000); }
+} else {
+  try { const m = store.get('anki-circuit'); if (m) setMap(JSON.parse(m)); } catch (e) { /* tracé illisible : à relever */ }
+  restoreKnown();
 }
 </script>
 </body>
