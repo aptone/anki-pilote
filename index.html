@@ -244,7 +244,7 @@ const BOT_LEVELS = [
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
-const VERSION = 'v5 · 18/11 19:20';
+const VERSION = 'v6 · 18/11 19:35';
 const PALETTE = ['#ff7a1a', '#3ecf8e', '#4da3ff', '#ff5468', '#c77dff', '#ffd23f', '#00d4d4', '#ff8fd0'];
 const SCAN_SPEED = 500;       // vitesse du tour de relevé du circuit (mm/s)
 
@@ -319,7 +319,7 @@ class Car {
     this.sentOffset = 0;
     this.bot = null; this.botJit = 1; this.botNext = 0; this.lapSeq = null; this.curPiece = null;
     // Circuit : pièces lues avec le sens mesuré des virages, place sur le tracé, couleur d'affichage
-    this.seg = []; this.hist = []; this.miss = 0; this.mi = null; this.kv = 1; this.repDist = 0; this.lastPosT = 0; this.mdir = 1; this.enterT = 0; this.lastSpd = 0; this.lastLap = null; this.trLog = 0;
+    this.seg = []; this.hist = []; this.miss = 0; this.mi = null; this.kv = 1; this.repDist = 0; this.lastPosT = 0; this.xDist = 0; this.vNow = 0; this.xT = 0; this.mdir = 1; this.enterT = 0; this.lastSpd = 0; this.lastLap = null; this.trLog = 0;
     this.color = store.get('anki-color-' + device.id) || PALETTE[cars.length % PALETTE.length];
     this.padManual = false; this.restored = false;
     this.pad = Math.min(cars.length, 3);   // manette n pour la voiture n par défaut
@@ -505,8 +505,8 @@ class Car {
       const off = v.getFloat32(4, true), spd = v.getUint16(8, true);
       // Distance prédite par la vitesse annoncée depuis la dernière pièce reconnue (pour l'étalonnage, voir trackPiece)
       const tp = performance.now();
-      if (this.lastPosT) this.repDist += this.lastSpd * Math.min(tp - this.lastPosT, 1500) / 1000;
-      this.lastPosT = tp;
+      if (this.lastPosT) this.repDist += this.xDist / this.kv + this.lastSpd * (tp - this.xT) / 1000;   // parcours estimé depuis la position précédente
+      this.lastPosT = tp; this.xT = tp; this.xDist = 0;
       this.lastSpd = spd;
       this.f.piece.textContent = v.getUint8(3) + ' / ' + v.getUint8(2);
       this.f.speed.textContent = spd + ' mm/s';
@@ -1303,7 +1303,7 @@ function trackPiece(c, id) {
       // de la vitesse remontée par la voiture et les longueurs de pièces supposées.
       let real = 0; for (let j = c.mi; j !== best; j = mod(j + c.mdir, N)) real += G[j].len;
       if (c.repDist > 300) c.kv = clamp(0.7 * c.kv + 0.3 * real / c.repDist, 0.4, 2.5);
-      c.mi = best; c.enterT = now; c.repDist = 0; c.miss = 0; return;
+      c.mi = best; c.enterT = now; c.repDist = 0; c.xDist = 0; c.miss = 0; return;
     }
     if (S[c.mi].id === id) return;                 // relecture de la pièce en cours
     log(c.label, 'SUIVI pièce ' + id + ' inattendue après ' + S[c.mi].id + ' (n° ' + (c.mi + 1) + ', ' + Math.round(run) + ' mm parcourus)');
@@ -1317,7 +1317,7 @@ function trackPiece(c, id) {
       for (let k = 0; k < K && ok; k++) ok = S[mod(j - d * k, N)].id === c.hist[c.hist.length - 1 - k];
       if (ok) cand.push([j, d]);
     }
-    if (cand.length === 1) { [c.mi, c.mdir] = cand[0]; c.enterT = now; c.repDist = 0; c.miss = 0; return; }
+    if (cand.length === 1) { [c.mi, c.mdir] = cand[0]; c.enterT = now; c.repDist = 0; c.xDist = 0; c.miss = 0; return; }
     if (cand.length > 1) break;                    // ambigu : attendre d'autres pièces
   }
   if (c.miss > 8 && c.mi !== null) { c.mi = null; log(c.label, 'SUIVI perdu, dernières pièces ' + c.hist.join(',')); }   // posée ailleurs à la main, etc.
@@ -1329,7 +1329,7 @@ function latOf(c) {
 function circuitState() {
   const now = performance.now();
   return { t: 'st', map: CIR.map, scan: CIR.scan ? CIR.scan.label : null, cars: cars.map((c, k) => ({
-    k, name: c.label, color: c.color, on: c.connected, mi: c.mi, dir: c.mdir, age: now - c.enterT, spd: c.lastSpd * c.kv, done: c.repDist * c.kv, doneT: now - c.lastPosT, lat: latOf(c),
+    k, name: c.label, color: c.color, on: c.connected, mi: c.mi, dir: c.mdir, age: now - c.enterT, spd: c.vNow * c.kv, done: c.repDist * c.kv + c.xDist, doneT: now - c.xT, lat: latOf(c),
     laps: c.laps || 0, last: c.lastLap, best: c.best, cur: c.connected && c.lapStart !== null ? (now - c.lapStart) / 1000 : null,
   })) };
 }
@@ -1517,6 +1517,13 @@ setInterval(() => {
   for (const c of cars) {     // vitesse estimée : la consigne suivie avec la rampe envoyée
     const step = (c.sentRamp || 1000) * TICK_MS / 1000;
     c.est = c.connected ? c.est + clamp(c.sentSpeed - c.est, -step, step) : 0;
+    // Avance à l'estime pour l'écran circuit depuis la dernière position reçue. Une voiture arrêtée n'envoie plus rien :
+    // sans position récente, on suit la vitesse commandée (avec ses rampes), plafonnée à la dernière vitesse mesurée.
+    const fresh = performance.now() - c.lastPosT < 250;
+    c.vNow = !c.connected ? 0 : fresh ? c.lastSpd : Math.min(c.lastSpd, c.est);
+    const tx = performance.now();
+    if (c.xT) c.xDist += c.vNow * c.kv * (tx - c.xT) / 1000;
+    c.xT = tx;
   }
   engineTick(vmax);
   stickTick();
