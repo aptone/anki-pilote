@@ -655,6 +655,7 @@ class Car {
   stop() { if (CIR.scan === this) CIR.scan = null; if (this.bot) setBots(false); this.kSpeed = 0; this.sentSpeed = 0; this.sentRamp = Number($('#brk').value); this.send(msg.setSpeed(0, this.sentRamp), 'speed'); }
   uTurn() {
     this.send(msg.uTurn());
+    this.mdir = -this.mdir; this.hist = [];
     // Sens inversé : le tour en cours et le tracé mémorisé ne sont plus valables
     this.lapStart = null; this.cur = []; this.lapSeq = null; this.f.cur.textContent = '–';
   }
@@ -1242,7 +1243,10 @@ function onLap(c, segs) {
     CIR.scan = null; c.kSpeed = 0;
     setMap(buildMap(segs, c.label), 'relevé par ' + c.label);
     status('Circuit relevé par ' + c.label + ' : ' + segs.length + ' pièces.' + (CIR.map.warn ? ' Attention, ' + CIR.map.warn : ''), !!CIR.map.warn);
-  } else if (!CIR.map) setMap(buildMap(segs, c.label), 'tracé déduit du tour de ' + c.label);
+  } else if (!CIR.map) {
+    const m = buildMap(segs, c.label);
+    if (!m.warn) setMap(m, 'tracé déduit du tour de ' + c.label);
+  }
 }
 function startScan() {
   const c = selected;
@@ -1276,11 +1280,20 @@ function trackPiece(c, id) {
   if (!CIR.map) { c.enterT = now; return; }
   c.hist.push(id); if (c.hist.length > 6) c.hist.shift();
   const S = CIR.map.segs, N = S.length;
-  if (c.mi !== null) {
-    for (const [k, d] of [[1, c.mdir], [2, c.mdir], [3, c.mdir], [1, -c.mdir]]) {
-      const j = mod(c.mi + d * k, N);
-      if (S[j].id === id) { c.mi = j; c.mdir = d; c.enterT = now; c.miss = 0; return; }
+  if (c.mi !== null && CIR.geo) {
+    // À vitesse élevée, la voiture ne renvoie souvent aucune position dans les virages : on cherche la pièce lue vers
+    // l'avant, à la distance qu'elle a dû parcourir depuis la dernière pièce reconnue (vitesse × temps).
+    const run = (now - c.enterT) / 1000 * c.lastSpd, G = CIR.geo.segs;
+    let best = -1, bestE = Infinity, dist = 0;
+    for (let k = 1; k < N; k++) {
+      dist += G[mod(c.mi + c.mdir * (k - 1), N)].len;      // distance jusqu'au début de la k-ième pièce suivante
+      const j = mod(c.mi + c.mdir * k, N);
+      if (S[j].id !== id) continue;
+      if (k > 1 && dist > run * 1.6 + 700) break;           // trop loin pour ce qu'elle a pu parcourir
+      const e = Math.abs(dist - run);
+      if (e < bestE) { bestE = e; best = j; }
     }
+    if (best >= 0) { c.mi = best; c.enterT = now; c.miss = 0; return; }
     if (S[c.mi].id === id) return;                 // relecture de la pièce en cours
     if (++c.miss < 3) return;                      // lecture isolée douteuse : on continue à l'estime
   }
@@ -1378,7 +1391,7 @@ function cvDraw() {
   for (const c of st.cars) {
     if (!c.on || c.mi === null || c.mi >= g.segs.length) continue;
     // Position à l'estime depuis l'entrée dans la dernière pièce lue, en continuant sur les pièces suivantes si besoin
-    const sg = g.segs[c.mi], adv = Math.min((c.age + dt) / 1000 * c.spd, sg.len + 900);
+    const sg = g.segs[c.mi], adv = Math.min((c.age + dt) / 1000 * c.spd, sg.len + 3000);
     const sd = mod(c.dir > 0 ? sg.d0 + adv : sg.d0 + sg.len - adv, g.total);
     let i = 0; while (i < g.segs.length - 1 && sd >= g.segs[i + 1].d0) i++;
     const [x, y] = geoPoint(g, i, (sd - g.segs[i].d0) / g.segs[i].len, c.lat * c.dir);
