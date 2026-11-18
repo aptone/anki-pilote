@@ -318,7 +318,7 @@ class Car {
     this.sentOffset = 0;
     this.bot = null; this.botJit = 1; this.botNext = 0; this.lapSeq = null; this.curPiece = null;
     // Circuit : pièces lues avec le sens mesuré des virages, place sur le tracé, couleur d'affichage
-    this.seg = []; this.hist = []; this.mi = null; this.mdir = 1; this.enterT = 0; this.lastSpd = 0; this.lastLap = null; this.trLog = 0;
+    this.seg = []; this.hist = []; this.miss = 0; this.mi = null; this.mdir = 1; this.enterT = 0; this.lastSpd = 0; this.lastLap = null; this.trLog = 0;
     this.color = store.get('anki-color-' + device.id) || PALETTE[cars.length % PALETTE.length];
     this.padManual = false; this.restored = false;
     this.pad = Math.min(cars.length, 3);   // manette n pour la voiture n par défaut
@@ -1268,22 +1268,34 @@ function circuitCmd(cmd, i) {
 }
 const cvCmd = (cmd, i) => CIR.popup ? CIR.bc && CIR.bc.postMessage({ t: 'cmd', c: cmd, i }) : circuitCmd(cmd, i);
 
+// Une pièce peut être traversée sans aucune position lue (pièce courte, grande vitesse) et une lecture peut être fausse :
+// on accepte jusqu'à 2 pièces sautées, on ignore une lecture isolée qui ne colle pas (la voiture continue à l'estime),
+// et on ne se recale sur l'ensemble du tracé qu'après plusieurs lectures incohérentes.
 function trackPiece(c, id) {
-  c.enterT = performance.now();
+  const now = performance.now();
+  if (!CIR.map) { c.enterT = now; return; }
   c.hist.push(id); if (c.hist.length > 6) c.hist.shift();
-  const m = CIR.map; if (!m) return;
-  const S = m.segs, N = S.length;
-  if (c.mi !== null) for (const d of [c.mdir, -c.mdir]) {
-    const j = mod(c.mi + d, N);
-    if (S[j].id === id) { c.mi = j; c.mdir = d; return; }
+  const S = CIR.map.segs, N = S.length;
+  if (c.mi !== null) {
+    for (const [k, d] of [[1, c.mdir], [2, c.mdir], [3, c.mdir], [1, -c.mdir]]) {
+      const j = mod(c.mi + d * k, N);
+      if (S[j].id === id) { c.mi = j; c.mdir = d; c.enterT = now; c.miss = 0; return; }
+    }
+    if (S[c.mi].id === id) return;                 // relecture de la pièce en cours
+    if (++c.miss < 3) return;                      // lecture isolée douteuse : on continue à l'estime
   }
-  const K = Math.min(c.hist.length, 4), cand = [];
-  for (let j = 0; j < N; j++) for (const d of [1, -1]) {
-    let ok = true;
-    for (let k = 0; k < K && ok; k++) ok = S[mod(j - d * k, N)].id === c.hist[c.hist.length - 1 - k];
-    if (ok) cand.push([j, d]);
+  // Recalage global sur les dernières pièces lues, en partant de la fenêtre la plus longue qui donne une seule place
+  for (let K = Math.min(c.hist.length, 4); K >= 2; K--) {
+    const cand = [];
+    for (let j = 0; j < N; j++) for (const d of [1, -1]) {
+      let ok = true;
+      for (let k = 0; k < K && ok; k++) ok = S[mod(j - d * k, N)].id === c.hist[c.hist.length - 1 - k];
+      if (ok) cand.push([j, d]);
+    }
+    if (cand.length === 1) { [c.mi, c.mdir] = cand[0]; c.enterT = now; c.miss = 0; return; }
+    if (cand.length > 1) break;                    // ambigu : attendre d'autres pièces
   }
-  if (cand.length === 1) [c.mi, c.mdir] = cand[0]; else c.mi = null;
+  if (c.miss > 8) c.mi = null;                     // vraiment perdue (posée ailleurs à la main, etc.)
 }
 function latOf(c) {
   if (c.codeOff !== null && performance.now() - c.codeT < 1500) return c.codeOff;     // mesure sur les codes de la piste
@@ -1365,8 +1377,11 @@ function cvDraw() {
   const rad = Math.max(24, 11 / sc), fs = 15 / sc;
   for (const c of st.cars) {
     if (!c.on || c.mi === null || c.mi >= g.segs.length) continue;
-    const f = clamp((c.age + dt) / 1000 * c.spd / g.segs[c.mi].len, 0, 0.98);
-    const [x, y] = geoPoint(g, c.mi, c.dir > 0 ? f : 1 - f, c.lat * c.dir);
+    // Position à l'estime depuis l'entrée dans la dernière pièce lue, en continuant sur les pièces suivantes si besoin
+    const sg = g.segs[c.mi], adv = Math.min((c.age + dt) / 1000 * c.spd, sg.len + 900);
+    const sd = mod(c.dir > 0 ? sg.d0 + adv : sg.d0 + sg.len - adv, g.total);
+    let i = 0; while (i < g.segs.length - 1 && sd >= g.segs[i + 1].d0) i++;
+    const [x, y] = geoPoint(g, i, (sd - g.segs[i].d0) / g.segs[i].len, c.lat * c.dir);
     ctx.beginPath(); ctx.arc(x, y, rad, 0, 2 * Math.PI);
     ctx.fillStyle = c.color; ctx.fill(); ctx.lineWidth = 3 / sc; ctx.strokeStyle = '#fff'; ctx.stroke();
     ctx.font = '600 ' + fs + 'px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
