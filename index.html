@@ -244,7 +244,7 @@ const BOT_LEVELS = [
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
-const VERSION = 'v4 · 18/11 19:05';
+const VERSION = 'v5 · 18/11 19:20';
 const PALETTE = ['#ff7a1a', '#3ecf8e', '#4da3ff', '#ff5468', '#c77dff', '#ffd23f', '#00d4d4', '#ff8fd0'];
 const SCAN_SPEED = 500;       // vitesse du tour de relevé du circuit (mm/s)
 
@@ -319,7 +319,7 @@ class Car {
     this.sentOffset = 0;
     this.bot = null; this.botJit = 1; this.botNext = 0; this.lapSeq = null; this.curPiece = null;
     // Circuit : pièces lues avec le sens mesuré des virages, place sur le tracé, couleur d'affichage
-    this.seg = []; this.hist = []; this.miss = 0; this.mi = null; this.mdir = 1; this.enterT = 0; this.lastSpd = 0; this.lastLap = null; this.trLog = 0;
+    this.seg = []; this.hist = []; this.miss = 0; this.mi = null; this.kv = 1; this.repDist = 0; this.lastPosT = 0; this.mdir = 1; this.enterT = 0; this.lastSpd = 0; this.lastLap = null; this.trLog = 0;
     this.color = store.get('anki-color-' + device.id) || PALETTE[cars.length % PALETTE.length];
     this.padManual = false; this.restored = false;
     this.pad = Math.min(cars.length, 3);   // manette n pour la voiture n par défaut
@@ -503,6 +503,10 @@ class Car {
     const id = v.getUint8(1);
     if (id === M.POSITION && v.byteLength >= 10) {
       const off = v.getFloat32(4, true), spd = v.getUint16(8, true);
+      // Distance prédite par la vitesse annoncée depuis la dernière pièce reconnue (pour l'étalonnage, voir trackPiece)
+      const tp = performance.now();
+      if (this.lastPosT) this.repDist += this.lastSpd * Math.min(tp - this.lastPosT, 1500) / 1000;
+      this.lastPosT = tp;
       this.lastSpd = spd;
       this.f.piece.textContent = v.getUint8(3) + ' / ' + v.getUint8(2);
       this.f.speed.textContent = spd + ' mm/s';
@@ -1278,13 +1282,13 @@ const cvCmd = (cmd, i) => CIR.popup ? CIR.bc && CIR.bc.postMessage({ t: 'cmd', c
 // et on ne se recale sur l'ensemble du tracé qu'après plusieurs lectures incohérentes.
 function trackPiece(c, id) {
   const now = performance.now();
-  if (!CIR.map) { c.enterT = now; return; }
+  if (!CIR.map) { c.enterT = now; c.repDist = 0; return; }
   c.hist.push(id); if (c.hist.length > 6) c.hist.shift();
   const S = CIR.map.segs, N = S.length;
   if (c.mi !== null && CIR.geo) {
     // À vitesse élevée, la voiture ne renvoie souvent aucune position dans les virages : on cherche la pièce lue vers
     // l'avant, à la distance qu'elle a dû parcourir depuis la dernière pièce reconnue (vitesse × temps).
-    const run = (now - c.enterT) / 1000 * c.lastSpd, G = CIR.geo.segs;
+    const run = c.repDist * c.kv, G = CIR.geo.segs;
     let best = -1, bestE = Infinity, dist = 0;
     for (let k = 1; k < N; k++) {
       dist += G[mod(c.mi + c.mdir * (k - 1), N)].len;      // distance jusqu'au début de la k-ième pièce suivante
@@ -1294,7 +1298,13 @@ function trackPiece(c, id) {
       const e = Math.abs(dist - run);
       if (e < bestE) { bestE = e; best = j; }
     }
-    if (best >= 0) { c.mi = best; c.enterT = now; c.miss = 0; return; }
+    if (best >= 0) {
+      // Étalonnage : distance réelle sur le tracé / distance prédite par la vitesse annoncée. Corrige à la fois un écart
+      // de la vitesse remontée par la voiture et les longueurs de pièces supposées.
+      let real = 0; for (let j = c.mi; j !== best; j = mod(j + c.mdir, N)) real += G[j].len;
+      if (c.repDist > 300) c.kv = clamp(0.7 * c.kv + 0.3 * real / c.repDist, 0.4, 2.5);
+      c.mi = best; c.enterT = now; c.repDist = 0; c.miss = 0; return;
+    }
     if (S[c.mi].id === id) return;                 // relecture de la pièce en cours
     log(c.label, 'SUIVI pièce ' + id + ' inattendue après ' + S[c.mi].id + ' (n° ' + (c.mi + 1) + ', ' + Math.round(run) + ' mm parcourus)');
     if (++c.miss < 3) return;                      // lecture isolée douteuse : on continue à l'estime
@@ -1307,7 +1317,7 @@ function trackPiece(c, id) {
       for (let k = 0; k < K && ok; k++) ok = S[mod(j - d * k, N)].id === c.hist[c.hist.length - 1 - k];
       if (ok) cand.push([j, d]);
     }
-    if (cand.length === 1) { [c.mi, c.mdir] = cand[0]; c.enterT = now; c.miss = 0; return; }
+    if (cand.length === 1) { [c.mi, c.mdir] = cand[0]; c.enterT = now; c.repDist = 0; c.miss = 0; return; }
     if (cand.length > 1) break;                    // ambigu : attendre d'autres pièces
   }
   if (c.miss > 8 && c.mi !== null) { c.mi = null; log(c.label, 'SUIVI perdu, dernières pièces ' + c.hist.join(',')); }   // posée ailleurs à la main, etc.
@@ -1319,7 +1329,7 @@ function latOf(c) {
 function circuitState() {
   const now = performance.now();
   return { t: 'st', map: CIR.map, scan: CIR.scan ? CIR.scan.label : null, cars: cars.map((c, k) => ({
-    k, name: c.label, color: c.color, on: c.connected, mi: c.mi, dir: c.mdir, age: now - c.enterT, spd: c.lastSpd, lat: latOf(c),
+    k, name: c.label, color: c.color, on: c.connected, mi: c.mi, dir: c.mdir, age: now - c.enterT, spd: c.lastSpd * c.kv, done: c.repDist * c.kv, doneT: now - c.lastPosT, lat: latOf(c),
     laps: c.laps || 0, last: c.lastLap, best: c.best, cur: c.connected && c.lapStart !== null ? (now - c.lapStart) / 1000 : null,
   })) };
 }
@@ -1393,7 +1403,7 @@ function cvDraw() {
   for (const c of st.cars) {
     if (!c.on || c.mi === null || c.mi >= g.segs.length) continue;
     // Position à l'estime depuis l'entrée dans la dernière pièce lue, en continuant sur les pièces suivantes si besoin
-    const sg = g.segs[c.mi], adv = Math.min((c.age + dt) / 1000 * c.spd, sg.len + 3000);
+    const sg = g.segs[c.mi], adv = Math.min(c.done + (c.doneT + dt) / 1000 * c.spd, sg.len + 3000);
     const sd = mod(c.dir > 0 ? sg.d0 + adv : sg.d0 + sg.len - adv, g.total);
     let i = 0; while (i < g.segs.length - 1 && sd >= g.segs[i + 1].d0) i++;
     const [x, y] = geoPoint(g, i, (sd - g.segs[i].d0) / g.segs[i].len, c.lat * c.dir);
