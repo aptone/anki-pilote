@@ -132,7 +132,7 @@
 </head>
 <body>
 <header>
-  <h1>Anki <span>Pilote</span></h1>
+  <h1>Anki <span>Pilote</span> <small id="ver" style="color:var(--dim);font-size:11px;letter-spacing:0;text-transform:none"></small></h1>
   <button class="primary" id="add">+ Ajouter une voiture</button>
   <button class="danger" id="stopAll">Arrêt général (Échap)</button>
   <button id="reconAll" hidden>Reconnecter tout</button>
@@ -192,7 +192,7 @@
 
 <div id="cv" hidden>
   <div class="cvtop">
-    <b>Circuit</b><span id="cvInfo"></span><span class="sp"></span>
+    <b>Circuit</b><small id="cvVer" style="color:var(--dim)"></small><span id="cvInfo"></span><span class="sp"></span>
     <button id="cvScan" title="La voiture sélectionnée fait un tour lent au centre de la piste">Relever le circuit</button>
     <button id="cvMirror" title="Inverse le sens de tous les virages">Miroir</button>
     <button id="cvReset">Remise à zéro des tours</button>
@@ -244,6 +244,7 @@ const BOT_LEVELS = [
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
+const VERSION = 'v4 · 18/11 19:05';
 const PALETTE = ['#ff7a1a', '#3ecf8e', '#4da3ff', '#ff5468', '#c77dff', '#ffd23f', '#00d4d4', '#ff8fd0'];
 const SCAN_SPEED = 500;       // vitesse du tour de relevé du circuit (mm/s)
 
@@ -1295,6 +1296,7 @@ function trackPiece(c, id) {
     }
     if (best >= 0) { c.mi = best; c.enterT = now; c.miss = 0; return; }
     if (S[c.mi].id === id) return;                 // relecture de la pièce en cours
+    log(c.label, 'SUIVI pièce ' + id + ' inattendue après ' + S[c.mi].id + ' (n° ' + (c.mi + 1) + ', ' + Math.round(run) + ' mm parcourus)');
     if (++c.miss < 3) return;                      // lecture isolée douteuse : on continue à l'estime
   }
   // Recalage global sur les dernières pièces lues, en partant de la fenêtre la plus longue qui donne une seule place
@@ -1308,7 +1310,7 @@ function trackPiece(c, id) {
     if (cand.length === 1) { [c.mi, c.mdir] = cand[0]; c.enterT = now; c.miss = 0; return; }
     if (cand.length > 1) break;                    // ambigu : attendre d'autres pièces
   }
-  if (c.miss > 8) c.mi = null;                     // vraiment perdue (posée ailleurs à la main, etc.)
+  if (c.miss > 8 && c.mi !== null) { c.mi = null; log(c.label, 'SUIVI perdu, dernières pièces ' + c.hist.join(',')); }   // posée ailleurs à la main, etc.
 }
 function latOf(c) {
   if (c.codeOff !== null && performance.now() - c.codeT < 1500) return c.codeOff;     // mesure sur les codes de la piste
@@ -1536,6 +1538,7 @@ if (!navigator.bluetooth) {
   $('#add').disabled = true;
 }
 
+$('#ver').textContent = VERSION; $('#cvVer').textContent = VERSION;
 // Démarrage : tracé mémorisé, voitures connues ; ou mode « écran circuit seul » dans une fenêtre séparée
 if (CIR.popup) {
   document.body.classList.add('cvonly'); document.title = 'Anki — Circuit';
