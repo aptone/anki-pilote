@@ -147,7 +147,7 @@
   <label class="ctl">Lignes de départ <select id="nStart"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
   <button id="bots">Lancer les bots</button>
   <button id="scanTrack" title="La voiture sélectionnée fait un tour lent au centre de la piste">Relever le circuit</button>
-  <label class="ctl" title="Vitesse en virage tant que rien n'a été appris sur la pièce">Virage bots (départ) <input type="range" id="botCurve" min="200" max="1500" step="50" value="500"><output id="botCurveO"></output></label>
+  <label class="ctl" title="Capacité de pilotage de tous les bots : part de la vitesse sûre qu'ils osent prendre et ampleur de leurs essais au-delà (100 % = réglage d'origine de chaque niveau)">Niveau bots <input type="range" id="botSkill" min="60" max="130" step="5" value="100"><output id="botSkillO"></output></label>
   <label class="ctl" title="Plafonne la vitesse des voitures pilotées à la main à la vitesse sûre apprise, avec freinage anticipé avant les virages"><input type="checkbox" id="assist"> Aide au pilotage</label>
   <button id="learnCopy" title="Copie les vitesses sûres et valeurs apprises par pièce et voie (pour analyse)">Copier l'apprentissage</button>
   <button id="learnReset" title="Efface les vitesses sûres et l'adhérence des voitures apprises sur ce circuit">Oublier l'apprentissage</button>
@@ -209,7 +209,7 @@
 </div>
 
 <footer>
-  Clavier (voiture sélectionnée) : <kbd>↑</kbd><kbd>↓</kbd> vitesse · <kbd>←</kbd><kbd>→</kbd> voie · <kbd>Espace</kbd> stop · <kbd>U</kbd> demi-tour · <kbd>1</kbd>…<kbd>9</kbd> choisir la voiture · <kbd>Échap</kbd> arrêt général.<br>Manette (une par voiture, choix sur la carte) : <kbd>stick droit ↑</kbd> vitesse · <kbd>stick droit ↓</kbd> ou <kbd>ZL</kbd> frein · <kbd>ZR</kbd> boost · <kbd>stick gauche</kbd> voie · <kbd>L</kbd> demi-tour · <kbd>bouton du bas</kbd> stop.<br>Bots : choisir « Bot débutant / moyen / expert » ou « Voiture balai » dans le menu d'une carte, puis « Lancer les bots ». Avec un tracé relevé, les bots apprennent la vitesse sûre de chaque pièce et voie, et s'adaptent quand la piste se salit (zones orange/rouges sur l'écran circuit).
+  Clavier (voiture sélectionnée) : <kbd>↑</kbd><kbd>↓</kbd> vitesse · <kbd>←</kbd><kbd>→</kbd> voie · <kbd>Espace</kbd> stop · <kbd>U</kbd> demi-tour · <kbd>1</kbd>…<kbd>9</kbd> choisir la voiture · <kbd>Échap</kbd> arrêt général.<br>Manette (une par voiture, choix sur la carte) : <kbd>stick droit ↑</kbd> vitesse · <kbd>stick droit ↓</kbd> ou <kbd>ZL</kbd> frein · <kbd>ZR</kbd> boost · <kbd>stick gauche</kbd> voie · <kbd>L</kbd> demi-tour · <kbd>bouton du bas</kbd> stop.<br>Bots : choisir « Bot débutant / moyen / expert » ou « Voiture balai » dans le menu d'une carte, puis « Lancer les bots ». Avec un tracé relevé, les bots apprennent la vitesse sûre de chaque pièce et voie dès les premiers tours, ralentissent au tour suivant une glissade et réessaient plus vite quand la piste redevient bonne (zones orange/rouges sur l'écran circuit). « Niveau bots » règle la capacité de pilotage de tous les bots.
   <details><summary>Journal BLE</summary><button id="copyLog" style="margin-top:8px">Copier le journal</button><div id="log"></div></details>
 </footer>
 
@@ -243,18 +243,19 @@ const PIECE_KIND = { 33: 'Dép', 34: 'Arr', 10: 'X', 17: 'V', 18: 'V', 20: 'V', 
 // antic : part de ce temps de réaction qu'il anticipe (1 = tout, un débutant découvre le virage en retard).
 // noise : dispersion de la vitesse visée d'une pièce à l'autre. mistake : probabilité d'entrer trop vite dans un virage.
 // lane : 'random' (voie au hasard), 'smart' (voie la plus propre pour le prochain virage, une fois sur deux), 'best' (toujours).
-// overtake : probabilité de tenter un dépassement plutôt que de rester derrière. probe : tente de temps en temps un peu
-// plus vite que la vitesse sûre pour la faire remonter (piste nettoyée, pneus propres).
-// Sans tracé : ancien comportement (part s de V max en ligne droite, part c de « Virage bots » en virage).
+// overtake : probabilité de tenter un dépassement plutôt que de rester derrière. probe : après un passage propre, le bot
+// repasse à vitesse sûre + probe (0,12 = +12 %) pour la faire monter (piste nettoyée, pneus propres).
+// « Niveau bots » (réglage) multiplie frac et probe pour tous les bots.
+// Sans tracé : ancien comportement (part s de V max en ligne droite, part c de CURVE0 en virage).
 const BOT_LEVELS = [
-  { name: 'Bot débutant', s: 0.6, c: 0.8, frac: 0.75, brake: 1.15, lat: 300, antic: 0.6, noise: 0.08, mistake: 0.08, lane: 'random', overtake: 0.15, probe: false },
-  { name: 'Bot moyen', s: 0.8, c: 0.9, frac: 0.88, brake: 1.15, lat: 180, antic: 0.8, noise: 0.04, mistake: 0.04, lane: 'smart', overtake: 0.5, probe: false },
-  { name: 'Bot expert', s: 1.0, c: 1.0, frac: 0.97, brake: 1.0, lat: 60, antic: 1, noise: 0.015, mistake: 0, lane: 'best', overtake: 0.9, probe: true },
+  { name: 'Bot débutant', s: 0.6, c: 0.8, frac: 0.75, brake: 1.15, lat: 300, antic: 0.6, noise: 0.08, mistake: 0.08, lane: 'random', overtake: 0.15, probe: 0 },
+  { name: 'Bot moyen', s: 0.8, c: 0.9, frac: 0.88, brake: 1.15, lat: 180, antic: 0.8, noise: 0.04, mistake: 0.04, lane: 'smart', overtake: 0.5, probe: 0.06 },
+  { name: 'Bot expert', s: 1.0, c: 1.0, frac: 0.97, brake: 1.0, lat: 60, antic: 1, noise: 0.015, mistake: 0, lane: 'best', overtake: 0.9, probe: 0.12 },
   { name: 'Voiture balai', sweep: true },
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
-const VERSION = 'v8 · 18/11 20:45';
+const VERSION = 'v9 · 18/11 21:50';
 const PALETTE = ['#ff7a1a', '#3ecf8e', '#4da3ff', '#ff5468', '#c77dff', '#ffd23f', '#00d4d4', '#ff8fd0'];
 const SCAN_SPEED = 500;       // vitesse du tour de relevé du circuit (mm/s)
 
@@ -652,6 +653,7 @@ class Car {
   // Applique les consignes (appelé à cadence fixe). N'émet que sur changement.
   apply(speed, offset) {
     speed = Math.round(speed); offset = Math.round(offset);
+    if (offset !== this.kOffLast) { this.kOffLast = offset; this.kOffT = performance.now(); }   // voie visée modifiée
     this.bar.style.width = clamp(speed / 5000 * 100, 0, 100) + '%';
     this.tgt.style.left = (50 + clamp(offset / HALF_TRACK_MM, -1, 1) * 46) + '%';
     if (!this.connected) { if (this.kSpeed) this.kSpeed = 0; return; }
@@ -740,7 +742,8 @@ function bindRange(id, unit) {
   const v = store.get('anki-' + id); if (v !== null) $('#' + id).value = v;
   $('#' + id).addEventListener('change', e => store.set('anki-' + id, e.target.value));
 });
-bindRange('vmax', 'mm/s'); bindRange('acc', 'mm/s²'); bindRange('dec', 'mm/s²'); bindRange('brk', 'mm/s²'); bindRange('boost', '% en plus'); bindRange('botCurve', 'mm/s'); bindRange('swSpeed', 'mm/s'); bindRange('swLane', 'mm du centre'); bindRange('vmin', 'mm/s'); bindRange('thrTravel', '% de la zone'); bindRange('laneTravel', 'px'); bindRange('laneRate', 'mm/s à fond');
+{ const v = store.get('anki-botSkill'); if (v !== null) $('#botSkill').value = v; $('#botSkill').addEventListener('change', e => store.set('anki-botSkill', e.target.value)); }
+bindRange('vmax', 'mm/s'); bindRange('acc', 'mm/s²'); bindRange('dec', 'mm/s²'); bindRange('brk', 'mm/s²'); bindRange('boost', '% en plus'); bindRange('botSkill', '%'); bindRange('swSpeed', 'mm/s'); bindRange('swLane', 'mm du centre'); bindRange('vmin', 'mm/s'); bindRange('thrTravel', '% de la zone'); bindRange('laneTravel', 'px'); bindRange('laneRate', 'mm/s à fond');
 { const lw = $('#laneTravel'), v = store.get('anki-laneW'); if (v !== null) { lw.value = v; lw.dispatchEvent(new Event('input')); }
   const up = () => { $('#rLane').style.setProperty('--laneW', lw.value + 'px'); store.set('anki-laneW', lw.value); }; lw.addEventListener('input', up); up(); }
 
@@ -1199,7 +1202,7 @@ function runRecover(c, now) {
 }
 function runBots(vmax) {
   if (!BOTS.on) return;
-  const vCurve = Number($('#botCurve').value), now = performance.now();
+  const vCurve = CURVE0, now = performance.now();
   for (const c of cars) {
     if (!c.bot || !c.connected) continue;
     if (c.bot.sweep) { runSweeper(c); continue; }
@@ -1449,18 +1452,20 @@ function latOf(c) {
 const BANDS = BOT_LANES;                    // 4 voies de référence (mm, repère du relevé, + = à droite)
 const GRIP = { key: '', P: [], carF: {}, dirty: false, saveT: 0 };
 const LEARN = {
-  stable: 0.5, unstable: 1.0,               // seuils du score d'instabilité
-  down: 0.92, delocDown: 0.8,               // vitesse sûre ramenée à cette part de la vitesse où la voiture a décroché
+  stable: 0.5, edge: 0.7, unstable: 1.0,    // score : < stable propre, ≥ edge à la limite, ≥ unstable glissade
+  down: 0.9, edgeDown: 0.97, delocDown: 0.8, // vitesse sûre ramenée à cette part de la vitesse du passage
   slipN: 0.15, diffN: 0.06,                 // glissement des roues et écart G/D (normalisé) jugés anormaux
   minCurve: 300, maxV: 5000,
 };
+const CURVE0 = 650;                         // vitesse en virage tant que rien n'est appris sur aucun virage (mm/s)
 const ema = (a, x, k) => a === null || a === undefined ? x : a + k * (x - a);
 const bandOf = lat => { let b = 0; BANDS.forEach((m, k) => { if (Math.abs(lat - m) < Math.abs(lat - BANDS[b])) b = k; }); return b; };
 const carId = c => c.device.id;
-// Position latérale pour la conduite : la dernière mesure sur les codes reste valable tant qu'aucun changement de voie
-// n'a été demandé depuis (en virage, sans codes, la référence interne de la voiture peut être décalée).
+// Position latérale pour la conduite : la dernière mesure sur les codes (lignes droites) fait foi pendant 4 s, ce qui couvre
+// un virage. La référence interne de la voiture, seule disponible en virage, peut être décalée. Un passage pendant
+// lequel une consigne de voie a été envoyée n'est de toute façon pas utilisé pour l'apprentissage.
 function latNow(c) {
-  if (c.codeOff !== null && c.laneT < c.codeT - 300) return c.codeOff;
+  if (c.codeOff !== null && performance.now() - c.codeT < 4000) return c.codeOff;
   return latOf(c);
 }
 function gripKey(m) { return m ? m.segs.map(sg => sg.id).join(',') + '/' + m.nStart : ''; }
@@ -1478,7 +1483,7 @@ function gripSave(force) {
   if (!GRIP.key || !GRIP.dirty || (!force && now - GRIP.saveT < 5000)) return;
   GRIP.dirty = false; GRIP.saveT = now;
   // okBy (observations récentes des autres voitures) n'a de sens que pendant la séance
-  store.set('anki-grip', JSON.stringify({ key: GRIP.key, P: GRIP.P.map(p => ({ b: p.b.map(e => { const o = Object.assign({}, e); delete o.okBy; return o; }) })) }));
+  store.set('anki-grip', JSON.stringify({ key: GRIP.key, P: GRIP.P.map(p => ({ hp: p.hp, drift: p.drift, dn: p.dn, b: p.b.map(e => { const o = Object.assign({}, e); delete o.okBy; return o; }) })) }));
   for (const id in GRIP.carF) store.set('anki-cf-' + id, String(GRIP.carF[id]));
 }
 function gripReset() {
@@ -1489,14 +1494,18 @@ function gripReset() {
 function cellOf(i, b) { const p = GRIP.P[i]; return p ? p.b[b] : null; }
 function isCurve(i) { return CIR.map.segs[i].kind === 'V'; }
 // Vitesse sûre de la pièce i, voie b : apprise ; sinon la plus basse apprise sur les autres voies de la pièce ;
-// sinon « Virage bots » pour un virage et V max pour une droite.
+// sinon, pour un virage, la médiane de ce qui est appris sur les autres virages (CURVE0 au tout début) ; V max en droite.
 function vSafe(i, b) {
   const e = cellOf(i, b);
   if (e && e.v) return e.v;
   const o = GRIP.P[i] ? GRIP.P[i].b.filter(x => x.v).map(x => x.v) : [];
   if (o.length) return Math.min(...o);
-  return isCurve(i) ? Number($('#botCurve').value) : LEARN.maxV;
+  if (!isCurve(i)) return LEARN.maxV;
+  const all = [];
+  GRIP.P.forEach((p, k) => { if (p && isCurve(k)) p.b.forEach(x => { if (x.v) all.push(x.v); }); });
+  return all.length ? all.sort((a, z) => a - z)[all.length >> 1] : CURVE0;
 }
+const skill = () => Number($('#botSkill').value) / 100;
 function carF(c) {
   const id = carId(c);
   if (GRIP.carF[id] === undefined) { const s = Number(store.get('anki-cf-' + id)); GRIP.carF[id] = s > 0.3 && s < 1.5 ? s : 1; }
@@ -1579,27 +1588,25 @@ function passDone(c, i, p, wl, wr, drift, now) {
   const ratio = wheel !== null && !merged ? wheel / len : null;
   const diff = ratio !== null ? (wl - wr) / (wl + wr) : null;
   const ad = drift === null || laneAct ? null : Math.abs(drift);
+  // Valeurs habituelles : médianes des 7 derniers passages normaux, à n'importe quelle allure (la médiane écarte les
+  // glissades isolées). Roues : par pièce et par voie (le trajet en virage dépend de la voie). Dérive caméra : par pièce,
+  // toutes voies confondues, pour être utilisable dès le 3e passage.
+  const P = GRIP.P[i];
   const parts = {
-    slip: ratio !== null && e.ratio ? Math.abs(ratio / e.ratio - 1) / LEARN.slipN : 0,
-    diff: diff !== null && e.diff !== undefined ? Math.abs(diff - e.diff) / LEARN.diffN : 0,
-    drift: ad !== null && e.drift !== undefined ? Math.max(0, ad - e.drift) / Math.max(4, 1.5 * e.drift) : 0,
+    slip: ratio !== null && (e.n || 0) >= 2 ? Math.abs(ratio / e.ratio - 1) / LEARN.slipN : 0,
+    diff: diff !== null && (e.n || 0) >= 2 ? Math.abs(diff - e.diff) / LEARN.diffN : 0,
+    drift: ad !== null && (P.dn || 0) >= 3 ? Math.max(0, ad - P.drift) / Math.max(4, 1.5 * P.drift) : 0,
   };
+  const known = (ratio !== null && (e.n || 0) >= 2) || (ad !== null && (P.dn || 0) >= 3);
   const score = Math.max(parts.slip, parts.diff, parts.drift);
   const vs = vSafe(i, b), id = carId(c);
-  const known = (e.n || 0) >= 5;                                 // valeurs habituelles connues : le score a un sens
-  const info = ratio !== null || ad !== null;
-  if (known && info) { c.score = score; c.scoreT = now; }
+  if (known) { c.score = score; c.scoreT = now; }
   e.okBy = e.okBy || {};
-  // Valeurs habituelles de la pièce : médianes des 9 derniers passages à allure confortable (tour de relevé, balai, bots
-  // prudents). La médiane écarte les passages ratés (glissade, changement de voie dans la pièce).
-  if ((!known || score < LEARN.stable) && vObs <= Math.max(0.8 * vs, 650)) {
-    const push = (k, x) => { if (x === null) return; const h = e[k] = (e[k] || []).concat([x]).slice(-9); return h; };
-    const med = h => { const s = h.slice().sort((a, b) => a - b); return s[s.length >> 1]; };
-    let h;
-    if ((h = push('hr', ratio))) e.ratio = med(h);
-    if ((h = push('hd', diff))) e.diff = med(h);
-    if ((h = push('hp', ad))) e.drift = med(h);
-    if (ratio !== null || ad !== null) { e.n = (e.n || 0) + 1; GRIP.dirty = true; }
+  if (!known || score < LEARN.unstable) {
+    const med = h => { const t = h.slice().sort((x, z) => x - z); return t[t.length >> 1]; };
+    if (ratio !== null) { e.hr = (e.hr || []).concat([ratio]).slice(-7); e.ratio = med(e.hr); e.hd = (e.hd || []).concat([diff]).slice(-7); e.diff = med(e.hd); e.n = (e.n || 0) + 1; }
+    if (ad !== null) { P.hp = (P.hp || []).concat([ad]).slice(-7); P.drift = med(P.hp); P.dn = (P.dn || 0) + 1; }
+    GRIP.dirty = true;
   }
   // Lecture des codes : comparée à la meilleure valeur connue de cette pièce (certaines pièces se lisent mal d'origine).
   // Seulement à allure lente (relevé, balai, reprise), la voiture lisant de moins en moins en virage quand elle accélère.
@@ -1607,26 +1614,33 @@ function passDone(c, i, p, wl, wr, drift, now) {
     e.rq = ema(e.rq, p.reads > 0 ? 1 : 0, 0.15); e.rn = (e.rn || 0) + 1;
     if (e.rn >= 5) e.rref = Math.max(e.rref || 0, e.rq);
   }
+  if (!known) return;
   const tag = 'pièce ' + (i + 1) + ' (' + CIR.map.segs[i].id + ') voie ' + (b + 1);
-  if (!known || !info) return;
+  const detail = ' (glissement ' + parts.slip.toFixed(1) + ', roues ' + parts.diff.toFixed(1) + ', dérive ' + parts.drift.toFixed(1) + ')';
+  if ((score >= LEARN.unstable && vObs < 0.8 * vs) || (score >= LEARN.edge && score < LEARN.unstable && vObs < 0.9 * vs)) {
+    // Nettement sous la vitesse sûre : ce n'est pas l'adhérence (mesure, voiture à cheval sur deux voies, reposée)
+    log(c.label, 'MESURE ignorée ' + tag + ' à ' + Math.round(vObs) + ' mm/s, score ' + score.toFixed(1));
+    return;
+  }
   if (score >= LEARN.unstable) {
-    // Un passage instable isolé peut tenir de la mesure (voiture pas tout à fait dans la voie de référence, à cheval sur
-    // deux voies) : il en faut deux de suite sur la même pièce et voie, sauf écart franc. Très en dessous de la vitesse
-    // piste propre, ce n'est pas l'adhérence : ignoré (les sorties de piste, elles, comptent toujours).
-    const slow = e.ref && vObs < 0.5 * e.ref;
-    e.anom = (e.anom || 0) + 1;
-    if (slow || (e.anom < 2 && score < 2.5)) {
-      log(c.label, (slow ? 'MESURE ignorée ' : 'INSTABLE (à confirmer) ') + tag + ' à ' + Math.round(vObs) + ' mm/s, score ' + score.toFixed(1));
-      return;
+    // Glissade : correction dès ce passage, visible au tour suivant
+    e.calm = now + 30000;                                        // plus d'essai au-dessus ici pendant 30 s
+    blame(c, i, b, e, vObs, LEARN.down, now, 'GLISSE ' + tag + ' à ' + Math.round(vObs) + ' mm/s : score ' + score.toFixed(1) + detail);
+  } else if (score >= LEARN.edge) {
+    // À la limite : on se cale un peu en dessous de ce passage, sans attendre la glissade
+    e.calm = now + 15000;
+    if (vObs * LEARN.edgeDown < vs) {
+      e.v = Math.max(LEARN.minCurve, Math.round(vObs * LEARN.edgeDown)); e.ref = Math.max(e.ref || 0, vs); GRIP.dirty = true;
+      log(c.label, 'LIMITE ' + tag + ' à ' + Math.round(vObs) + ' mm/s : score ' + score.toFixed(1) + detail + ' → vitesse sûre ' + vs + ' → ' + e.v + ' mm/s');
     }
-  } else e.anom = 0;
-  if (score >= LEARN.unstable) {
-    e.anom = 0;
-    blame(c, i, b, e, vObs, LEARN.down, now,
-      'INSTABLE ' + tag + ' à ' + Math.round(vObs) + ' mm/s : score ' + score.toFixed(1) + ' (glissement ' + parts.slip.toFixed(1) + ', roues ' + parts.diff.toFixed(1) + ', dérive ' + parts.drift.toFixed(1) + ')');
-  } else if (score < LEARN.stable) {
     e.okBy[id] = { t: now, v: vObs, s: score };
-    if (vObs > vs * 1.01) { e.v = Math.min(LEARN.maxV, Math.round(Math.min(vObs, vs * 1.1))); e.ref = Math.max(e.ref || 0, e.v); GRIP.dirty = true; }
+  } else {
+    // Passage propre : la vitesse sûre suit ce que la voiture vient de tenir
+    e.okBy[id] = { t: now, v: vObs, s: score };
+    if (vObs > vs * 1.01) {
+      e.v = Math.min(LEARN.maxV, Math.round(Math.min(vObs, vs * 1.15))); e.ref = Math.max(e.ref || 0, e.v); GRIP.dirty = true;
+      if (isCurve(i)) log(c.label, 'TENU ' + tag + ' à ' + Math.round(vObs) + ' mm/s → vitesse sûre ' + vs + ' → ' + e.v + ' mm/s');
+    }
     GRIP.carF[id] = Math.min(1.05, carF(c) + 0.003);
   }
   if (!e.ref && e.v) e.ref = e.v;
@@ -1635,7 +1649,8 @@ function passDone(c, i, p, wl, wr, drift, now) {
 // en cause, ce sont les pneus de cette voiture. Sinon la vitesse sûre de la pièce et de la voie baisse.
 // Nettement plus vite que la vitesse sûre (erreur de pilotage, essai d'un bot) : ni la piste ni les pneus ne sont en cause.
 function blame(c, i, b, e, vObs, k, now, why) {
-  const id = carId(c), others = Object.entries(e.okBy || {}).some(([o, r]) => o !== id && now - r.t < 60000 && r.v >= 0.95 * vObs);
+  // Autres voitures passées proprement sur cette pièce (toutes voies) dans la minute, au moins aussi vite
+  const id = carId(c), others = GRIP.P[i].b.some(x => Object.entries(x.okBy || {}).some(([o, r]) => o !== id && now - r.t < 60000 && r.v >= 0.95 * vObs && r.s < LEARN.edge));
   const lim = vSafe(i, b) * carF(c);
   if (vObs > 1.15 * lim) { log(c.label, why + ' → trop vite (vitesse sûre ' + Math.round(lim) + ' mm/s), rien à corriger'); return; }
   if (others) {
@@ -1645,7 +1660,13 @@ function blame(c, i, b, e, vObs, k, now, why) {
     const before = vSafe(i, b);
     e.v = Math.max(LEARN.minCurve, Math.round(Math.min(before, vObs * k)));
     e.ref = Math.max(e.ref || 0, before);
-    log(c.label, why + ' → piste : vitesse sûre ' + before + ' → ' + e.v + ' mm/s');
+    // La poussière ne se limite pas à une voie : les autres voies de la pièce baissent un peu, sans descendre sous celle-ci
+    GRIP.P[i].b.forEach((x, k2) => {
+      if (k2 === b) return;
+      const vb = vSafe(i, k2);
+      if (vb > e.v) { x.ref = Math.max(x.ref || 0, vb); x.v = Math.max(e.v, Math.round(vb * 0.95)); }
+    });
+    log(c.label, why + ' → piste : vitesse sûre ' + before + ' → ' + e.v + ' mm/s (autres voies −5 %)');
   }
   GRIP.dirty = true;
 }
@@ -1657,7 +1678,7 @@ function onDeloc(c) {
   if (!e) return;
   const v = Math.max(c.lastSpd, Math.min(c.est, c.sentSpeed));
   if (v < 150) return;                                           // soulevée à l'arrêt
-  e.deloc = (e.deloc || 0) + 1;
+  e.deloc = (e.deloc || 0) + 1; e.calm = now + 60000;
   blame(c, pos.i, b, e, v, LEARN.delocDown, now, 'SORTIE pièce ' + (pos.i + 1) + ' (' + CIR.map.segs[pos.i].id + ') voie ' + (b + 1) + ' à ' + Math.round(v) + ' mm/s');
 }
 // Après un passage de la voiture balai : la vitesse sûre des voies balayées remonte à mi-chemin de la valeur piste propre ;
@@ -1703,9 +1724,12 @@ function planSpeed(c, L, now) {
   const G = CIR.geo.segs, N = G.length, f = carF(c), vmax = Number($('#vmax').value);
   const band = c.band !== null && c.bot ? c.band : bandOf(latNow(c) * c.mdir);
   const target = j => {
-    let v = Math.min(vSafe(j, band), vmax) * f * L.frac * (L.noise ? c.noise[j] || 1 : 1);
+    const sk = L === ASSIST ? 1 : skill();
+    let v = Math.min(vSafe(j, band), vmax) * f * Math.min(1.1, L.frac * sk) * (L.noise ? c.noise[j] || 1 : 1);
+    // Essai au-dessus de la vitesse sûre si le dernier passage de cette voiture ici était propre
     const ok = L.probe && isCurve(j) && ((cellOf(j, band) || {}).okBy || {})[carId(c)];
-    if (ok && ok.s < 0.3 && now - ok.t < 120000) v *= 1.1;        // essai au-dessus de la vitesse sûre pour la faire remonter
+    const cell = cellOf(j, band) || {};
+    if (ok && ok.s < LEARN.stable && now - ok.t < 120000 && !(cell.calm > now)) v *= 1 + L.probe * sk;
     return v;
   };
   // Freinage prévu avec 25 % de marge ; un bot dont brake > 1 se croit capable de freiner plus fort, il freine trop tard.
