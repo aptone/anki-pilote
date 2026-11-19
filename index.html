@@ -209,7 +209,7 @@
 </div>
 
 <footer>
-  Clavier (voiture sélectionnée) : <kbd>↑</kbd><kbd>↓</kbd> vitesse · <kbd>←</kbd><kbd>→</kbd> voie · <kbd>Espace</kbd> stop · <kbd>U</kbd> demi-tour · <kbd>1</kbd>…<kbd>9</kbd> choisir la voiture · <kbd>Échap</kbd> arrêt général.<br>Manette (une par voiture, choix sur la carte) : <kbd>stick droit ↑</kbd> vitesse · <kbd>stick droit ↓</kbd> ou <kbd>ZL</kbd> frein · <kbd>ZR</kbd> boost · <kbd>stick gauche</kbd> voie · <kbd>L</kbd> demi-tour · <kbd>bouton du bas</kbd> stop.<br>Bots : choisir « Bot débutant / moyen / expert » ou « Voiture balai » dans le menu d'une carte, puis « Lancer les bots ». Avec un tracé relevé, les bots apprennent la vitesse sûre de chaque pièce et voie dès les premiers tours, cherchent la limite de chaque virage (essais de plus en plus rapides, puis dichotomie entre vitesse tenue et vitesse de glissade), utilisent le boost en ligne droite et ralentissent dès le tour suivant une glissade (zones orange/rouges sur l'écran circuit). « Niveau bots » règle la capacité de pilotage de tous les bots.
+  Clavier (voiture sélectionnée) : <kbd>↑</kbd><kbd>↓</kbd> vitesse · <kbd>←</kbd><kbd>→</kbd> voie · <kbd>Espace</kbd> stop · <kbd>U</kbd> demi-tour · <kbd>1</kbd>…<kbd>9</kbd> choisir la voiture · <kbd>Échap</kbd> arrêt général.<br>Manette (une par voiture, choix sur la carte) : <kbd>stick droit ↑</kbd> vitesse · <kbd>stick droit ↓</kbd> ou <kbd>ZL</kbd> frein · <kbd>ZR</kbd> boost · <kbd>stick gauche</kbd> voie · <kbd>L</kbd> demi-tour · <kbd>bouton du bas</kbd> stop.<br>Bots : choisir « Bot débutant / moyen / expert » ou « Voiture balai » dans le menu d'une carte, puis « Lancer les bots ». Avec un tracé relevé, les bots apprennent la vitesse sûre de chaque pièce et voie dès les premiers tours, cherchent la limite de chaque virage (essais de plus en plus rapides, puis dichotomie entre vitesse tenue et vitesse de glissade), ont leur propre plage de vitesse, d'accélération et de freinage (indépendante des réglages manuels), mesurent le freinage réel de chaque voiture et ralentissent dès le tour suivant une glissade (zones orange/rouges sur l'écran circuit). « Niveau bots » règle la capacité de pilotage de tous les bots.
   <details><summary>Journal BLE</summary><button id="copyLog" style="margin-top:8px">Copier le journal</button><div id="log"></div></details>
 </footer>
 
@@ -244,22 +244,26 @@ const PIECE_KIND = { 33: 'Dép', 34: 'Arr', 10: 'X', 17: 'V', 18: 'V', 20: 'V', 
 // noise : dispersion de la vitesse visée d'une pièce à l'autre. mistake : probabilité d'entrer trop vite dans un virage.
 // lane : 'random' (voie au hasard), 'smart' (voie la plus propre pour le prochain virage, une fois sur deux), 'best' (toujours).
 // overtake : probabilité de tenter un dépassement plutôt que de rester derrière.
-// climb : en virage, tant qu'aucune glissade n'est connue, le bot tente vitesse sûre × (1 + climb) à chaque passage ;
-// une fois la limite trouvée, il vise le milieu entre vitesse tenue et vitesse de glissade (dichotomie), et retente
-// régulièrement au-dessus (la limite notée remonte de 6 % toutes les 45 s) pour suivre l'état de la piste.
-// boost : part du boost (réglage « Boost ») utilisée, en ligne droite comme un joueur : V max × (1 + boost × Boost).
-// brake > 1 : freine plus tard (expert : confiance dans le freinage ; débutant : erreur d'appréciation).
-// « Niveau bots » (réglage) multiplie frac, climb et boost pour tous les bots.
+// climb : en virage, le bot tente vitesse sûre × (1 + pas), le pas valant climb loin de la limite et diminuant quand le
+// dernier score de la pièce approche du seuil LIMITE, ou quand la vitesse visée approche des limites connues des autres
+// virages (5 % au plus). La limite d'une pièce vient des signes de glissade (LIMITE, GLISSE), pas des sorties ; une
+// fois connue, le bot vise le milieu entre vitesse tenue et limite (dichotomie), et retente au-dessus quand la limite
+// notée se relâche (+4 % par minute) pour suivre l'état de la piste.
+// « Niveau bots » (réglage) multiplie frac, climb, top, acc et dec pour tous les bots.
 // Sans tracé : ancien comportement (part s de V max en ligne droite, part c de CURVE0 en virage).
+// Plage propre aux bots, indépendante des réglages manuels V max / Accél. / Décél. / Frein / Boost :
+// top = part de BOT.vmax visée en ligne droite, acc / dec = rampes envoyées (mm/s²). Le freinage est planifié sur la
+// décélération réellement obtenue (mesurée sur chaque voiture), × brake : < 1 marge, > 1 freine trop tard (débutant).
+const BOT = { vmax: 3500, acc: 5000, dec: 6000 };
 const BOT_LEVELS = [
-  { name: 'Bot débutant', s: 0.6, c: 0.8, frac: 0.8, brake: 1.15, lat: 300, antic: 0.6, noise: 0.08, mistake: 0.08, lane: 'random', overtake: 0.15, climb: 0, boost: 0 },
-  { name: 'Bot moyen', s: 0.8, c: 0.9, frac: 0.92, brake: 1.1, lat: 150, antic: 0.9, noise: 0.03, mistake: 0.03, lane: 'smart', overtake: 0.5, climb: 0.12, boost: 0.5 },
-  { name: 'Bot expert', s: 1.0, c: 1.0, frac: 1.0, brake: 1.2, lat: 50, antic: 1, noise: 0.01, mistake: 0, lane: 'best', overtake: 0.9, climb: 0.25, boost: 1 },
+  { name: 'Bot débutant', s: 0.6, c: 0.8, frac: 0.8, top: 0.55, acc: 0.45, dec: 0.5, brake: 1.15, lat: 300, antic: 0.6, noise: 0.08, mistake: 0.08, lane: 'random', overtake: 0.15, climb: 0 },
+  { name: 'Bot moyen', s: 0.8, c: 0.9, frac: 0.92, top: 0.8, acc: 0.7, dec: 0.75, brake: 0.85, lat: 150, antic: 0.9, noise: 0.03, mistake: 0.03, lane: 'smart', overtake: 0.5, climb: 0.08 },
+  { name: 'Bot expert', s: 1.0, c: 1.0, frac: 1.0, top: 1, acc: 1, dec: 1, brake: 0.92, lat: 50, antic: 1, noise: 0.01, mistake: 0, lane: 'best', overtake: 0.9, climb: 0.15 },
   { name: 'Voiture balai', sweep: true },
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
-const VERSION = 'v10 · 19/11 13:30';
+const VERSION = 'v11 · 19/11 22:30';
 const PALETTE = ['#ff7a1a', '#3ecf8e', '#4da3ff', '#ff5468', '#c77dff', '#ffd23f', '#00d4d4', '#ff8fd0'];
 const SCAN_SPEED = 500;       // vitesse du tour de relevé du circuit (mm/s)
 
@@ -530,6 +534,21 @@ class Car {
       // Distance prédite par la vitesse annoncée depuis la dernière pièce reconnue (pour l'étalonnage, voir trackPiece)
       const tp = performance.now();
       if (this.lastPosT) this.repDist += this.xDist / this.kv + this.lastSpd * (tp - this.xT) / 1000;   // parcours estimé depuis la position précédente
+      // Décélération réelle pendant un ralentissement : pente entre la première et la dernière vitesse reçues tant que la
+      // voiture est nettement au-dessus de la consigne (positions rapprochées, en ligne droite)
+      const m = this.brkM;
+      if (m) {
+        if (tp - m.t > 1500 || this.sentSpeed > m.vT + 20) this.brkM = null;
+        else if (spd > m.vT + 80) {
+          if (!m.p0 || tp - this.lastPosT > 150) m.p0 = { t: tp, v: spd }; else m.p1 = { t: tp, v: spd };
+        } else {
+          if (m.p0 && m.p1 && m.p1.t - m.p0.t > 120 && m.p0.v - m.p1.v > 100) {
+            const eff = clamp((m.p0.v - m.p1.v) / ((m.p1.t - m.p0.t) / 1000) / m.R, 0.25, 1.2);
+            this.brkEff = ema(this.brkEff || null, eff, 0.3);
+          }
+          this.brkM = null;
+        }
+      }
       this.lastPosT = tp; this.xT = tp; this.xDist = 0;
       this.lastSpd = spd;
       this.f.piece.textContent = v.getUint8(3) + ' / ' + v.getUint8(2);
@@ -670,9 +689,13 @@ class Car {
     const speedChanged = speed !== this.sentSpeed && (Math.abs(speed - this.sentSpeed) >= 10 || speed === 0);
     const brakeChanged = b > 0 && Math.abs(b - this.sentBrake) >= 0.1;
     if (speedChanged || brakeChanged) {
-      const dec = Number($(this.bot ? '#brk' : '#dec').value);   // un bot freine franchement avant les virages
-      const ramp = speed > this.sentSpeed ? Number($('#acc').value)
+      const botL = this.bot && !this.bot.sweep && BOTS.on && CIR.map ? this.bot : null;   // bot : sa propre plage
+      const dec = Number($(this.bot ? '#brk' : '#dec').value);
+      const ramp = botL ? botRamp(botL, speed > this.sentSpeed)
+        : speed > this.sentSpeed ? Number($('#acc').value)
         : b > 0 ? Math.round(dec + b * Math.max(0, Number($('#brk').value) - dec)) : dec;
+      // Mesure de la décélération réelle : départ d'un ralentissement franc
+      if (speed < this.sentSpeed - 150 && speed > 0 && !this.brkM) this.brkM = { t: performance.now(), vT: speed, R: ramp };
       this.sentSpeed = speed; this.sentBrake = b; this.sentRamp = ramp;
       this.send(msg.setSpeed(speed, ramp), 'speed');
     }
@@ -1457,23 +1480,37 @@ const BANDS = BOT_LANES;                    // 4 voies de référence (mm, repè
 const GRIP = { key: '', P: [], carF: {}, dirty: false, saveT: 0 };
 const LEARN = {
   stable: 0.5, edge: 0.7, unstable: 1.0,    // score : < stable propre, ≥ edge à la limite, ≥ unstable glissade
-  down: 0.9, edgeDown: 0.97, delocDown: 0.8, // vitesse sûre ramenée à cette part de la vitesse du passage
+  down: 0.9, edgeDown: 0.94, delocDown: 0.8, // vitesse sûre ramenée à cette part de la vitesse du passage
   slipN: 0.15, diffN: 0.06,                 // glissement des roues et écart G/D (normalisé) jugés anormaux
   minCurve: 300, maxV: 5000,
 };
 const CURVE0 = 650;
 // Limite de glissade connue d'une pièce et voie, relâchée avec le temps (la piste peut s'être améliorée)
-function hiOf(e, now) { return e && e.hi ? e.hi * Math.pow(1.06, Math.floor((now - (e.hiT || 0)) / 45000)) : null; }
+function hiOf(e, now) { return e && e.hi ? e.hi * Math.pow(1.04, Math.floor((now - (e.hiT || 0)) / 60000)) : null; }
+// Limite de référence du circuit : plus basse limite connue sur un virage (repère pour les virages pas encore cernés)
+function refHi(now) {
+  let r = null;
+  GRIP.P.forEach((p, k) => { if (p && isCurve(k)) p.b.forEach(x => { const h = hiOf(x, now); if (h !== null && (r === null || h < r)) r = h; }); });
+  return r;
+}
 // Vitesse qu'un bot tente sur la pièce : vitesse sûre, ou au-dessus pour chercher la limite (virages)
 function attemptV(j, band, L, now, sk) {
   const lo = vSafe(j, band), e = cellOf(j, band) || {};
   if (!L.climb || !isCurve(j) || e.calm > now) return lo;
-  const hi = hiOf(e, now), up = lo * (1 + L.climb * sk);
+  // Pas réduit à l'approche de la limite : dernier score de la pièce (toutes voitures, moins d'une minute)
+  const ls = e.ls !== undefined && now - e.lsT < 60000 ? e.ls : 0;
+  let step = L.climb * sk * clamp(1 - ls / LEARN.edge, 0.15, 1);
+  const ref = refHi(now);
+  if (ref !== null && lo * (1 + step) > 0.95 * ref) step = Math.min(step, 0.05);
+  const hi = hiOf(e, now), up = lo * (1 + step);
   if (hi === null) return up;
-  if (hi < lo * 1.04) return lo;                 // limite atteinte : on reste dessous
+  if (hi < lo * 1.03) return lo;                 // limite atteinte : on reste dessous
   return Math.min(up, lo + 0.5 * (hi - lo));
 }
-const botTop = L => Number($('#vmax').value) * (1 + Number($('#boost').value) / 100 * Math.min(1, (L.boost || 0) * skill()));                         // vitesse en virage tant que rien n'est appris sur aucun virage (mm/s)
+const botTop = L => BOT.vmax * Math.min(1, (L.top || 1) * skill());
+const botRamp = (L, up) => Math.round((up ? BOT.acc * (L.acc || 1) : BOT.dec * (L.dec || 1)) * Math.min(1.2, skill()));
+// Décélération obtenue / rampe demandée, mesurée par voiture (positions reçues pendant un ralentissement)
+const brkEff = c => c.brkEff || 0.7;
 const ema = (a, x, k) => a === null || a === undefined ? x : a + k * (x - a);
 const bandOf = lat => { let b = 0; BANDS.forEach((m, k) => { if (Math.abs(lat - m) < Math.abs(lat - BANDS[b])) b = k; }); return b; };
 const carId = c => c.device.id;
@@ -1616,7 +1653,7 @@ function passDone(c, i, p, wl, wr, drift, now) {
   const known = (ratio !== null && (e.n || 0) >= 2) || (ad !== null && (P.dn || 0) >= 3);
   const score = Math.max(parts.slip, parts.diff, parts.drift);
   const vs = vSafe(i, b), id = carId(c);
-  if (known) { c.score = score; c.scoreT = now; }
+  if (known) { c.score = score; c.scoreT = now; e.ls = score; e.lsT = now; }
   e.okBy = e.okBy || {};
   if (!known || score < LEARN.unstable) {
     const med = h => { const t = h.slice().sort((x, z) => x - z); return t[t.length >> 1]; };
@@ -1633,7 +1670,8 @@ function passDone(c, i, p, wl, wr, drift, now) {
   if (!known) return;
   const tag = 'pièce ' + (i + 1) + ' (' + CIR.map.segs[i].id + ') voie ' + (b + 1);
   const detail = ' (glissement ' + parts.slip.toFixed(1) + ', roues ' + parts.diff.toFixed(1) + ', dérive ' + parts.drift.toFixed(1) + ')';
-  if ((score >= LEARN.unstable && vObs < 0.8 * vs) || (score >= LEARN.edge && score < LEARN.unstable && vObs < 0.9 * vs)) {
+  if ((score >= LEARN.unstable && vObs < 0.8 * vs) || (score >= LEARN.edge && score < LEARN.unstable && vObs < 0.9 * vs)
+      || (score >= LEARN.edge && vObs < 0.8 * (e.ref || 0))) {
     // Nettement sous la vitesse sûre : ce n'est pas l'adhérence (mesure, voiture à cheval sur deux voies, reposée)
     log(c.label, 'MESURE ignorée ' + tag + ' à ' + Math.round(vObs) + ' mm/s, score ' + score.toFixed(1));
     return;
@@ -1645,7 +1683,7 @@ function passDone(c, i, p, wl, wr, drift, now) {
     blame(c, i, b, e, vObs, LEARN.down, now, 'GLISSE ' + tag + ' à ' + Math.round(vObs) + ' mm/s : score ' + score.toFixed(1) + detail);
   } else if (score >= LEARN.edge) {
     // À la limite : on se cale un peu en dessous de ce passage, sans attendre la glissade
-    const h = hiOf(e, now); e.hi = Math.round(Math.min(h === null ? Infinity : h, vObs * 1.04)); e.hiT = now;
+    const h = hiOf(e, now); e.hi = Math.round(Math.min(h === null ? Infinity : h, vObs)); e.hiT = now;
     e.calm = now + 8000;
     if (vObs * LEARN.edgeDown < vs) {
       e.v = Math.max(LEARN.minCurve, Math.round(vObs * LEARN.edgeDown)); e.ref = Math.max(e.ref || 0, vs); GRIP.dirty = true;
@@ -1656,7 +1694,7 @@ function passDone(c, i, p, wl, wr, drift, now) {
     // Passage propre : la vitesse sûre suit ce que la voiture vient de tenir
     e.okBy[id] = { t: now, v: vObs, s: score };
     const h = hiOf(e, now);
-    if (h !== null && vObs >= 0.98 * h) { e.hi = Math.round(vObs * 1.08); e.hiT = now; }   // limite dépassée sans problème
+    if (h !== null && vObs >= 0.98 * h) { e.hi = Math.round(vObs * 1.05); e.hiT = now; }   // limite dépassée sans problème
     if (vObs > vs * 1.01) {
       e.v = Math.min(LEARN.maxV, Math.round(vObs)); e.ref = Math.max(e.ref || 0, e.v); GRIP.dirty = true;
       if (isCurve(i)) log(c.label, 'TENU ' + tag + ' à ' + Math.round(vObs) + ' mm/s → vitesse sûre ' + vs + ' → ' + e.v + ' mm/s');
@@ -1744,6 +1782,7 @@ function planSpeed(c, L, now) {
   if (!pos) return { v: null };
   const G = CIR.geo.segs, N = G.length, f = carF(c);
   const top = L === ASSIST ? Number($('#vmax').value) * (1 + Number($('#boost').value) / 100) : botTop(L);
+  const bot = L !== ASSIST;
   const band = c.band !== null && c.bot ? c.band : bandOf(latNow(c) * c.mdir);
   const target = j => {
     const sk = L === ASSIST ? 1 : skill(), lo = vSafe(j, band);
@@ -1752,7 +1791,7 @@ function planSpeed(c, L, now) {
     return Math.min(v * f * (L.noise ? c.noise[j] || 1 : 1), top);
   };
   // Freinage prévu avec 25 % de marge ; brake > 1 réduit la marge (expert) ou fait freiner trop tard (débutant).
-  const aPlan = 0.75 * Number($('#brk').value) * (L.brake || 1);
+  const aPlan = bot ? botRamp(L, false) * brkEff(c) * (L.brake || 1) : 0.75 * Number($('#brk').value);
   const vNow = Math.max(c.est, c.lastSpd || 0);
   // Distance parcourue avant que la décision suivante ne prenne effet (cycle de décision + transmission BLE). Un bon
   // pilote l'anticipe entièrement (antic = 1), un débutant en partie seulement.
