@@ -265,14 +265,14 @@ const PIECE_KIND = { 33: 'Dép', 34: 'Arr', 10: 'X', 17: 'V', 18: 'V', 20: 'V', 
 // les bots, mesure jugée peu fiable sur la piste réelle (voie mal connue) ; seules les sorties font baisser la croisière.
 const BOT = { vmax: 3500 };
 const BOT_LEVELS = [
-  { name: 'Bot débutant', s: 0.6, c: 0.8, cruise0: 650, sb: 0.06, up: 0.006, rampUp: 1500, rampDn: 2000, cap: 0.85, top: 0.7, lat: 300, noise: 0.05, mistake: 0.06, lane: 'random', overtake: 0.15 },
-  { name: 'Bot moyen', s: 0.8, c: 0.9, cruise0: 800, sb: 0.1, up: 0.04, rampUp: 2000, rampDn: 2500, cap: 0.94, top: 0.8, lat: 150, noise: 0.02, mistake: 0.02, lane: 'smart', overtake: 0.5 },
-  { name: 'Bot expert', s: 1.0, c: 1.0, cruise0: 900, sb: 0.12, up: 0.06, rampUp: 2500, rampDn: 3000, cap: 0.98, top: 0.88, lat: 50, noise: 0, mistake: 0, lane: 'best', overtake: 0.9 },
+  { name: 'Bot débutant', s: 0.6, c: 0.8, cruise0: 650, sb: 0.06, up: 0.006, rampUp: 1500, rampDn: 2000, cap: 0.85, margin: 0.85, top: 0.7, lat: 300, noise: 0.05, mistake: 0.06, lane: 'random', overtake: 0.15 },
+  { name: 'Bot moyen', s: 0.8, c: 0.9, cruise0: 800, sb: 0.1, up: 0.04, rampUp: 2000, rampDn: 2500, cap: 0.94, margin: 0.9, top: 0.8, lat: 150, noise: 0.02, mistake: 0.02, lane: 'smart', overtake: 0.5 },
+  { name: 'Bot expert', s: 1.0, c: 1.0, cruise0: 900, sb: 0.12, up: 0.06, rampUp: 2500, rampDn: 3000, cap: 0.98, margin: 0.95, top: 0.88, lat: 50, noise: 0, mistake: 0, lane: 'best', overtake: 0.9 },
   { name: 'Voiture balai', sweep: true },
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
-const VERSION = 'v16 · 20/11 15:25';
+const VERSION = 'v17 · 20/11 15:30';
 const PALETTE = ['#ff7a1a', '#3ecf8e', '#4da3ff', '#ff5468', '#c77dff', '#ffd23f', '#00d4d4', '#ff8fd0'];
 const SCAN_SPEED = 500;       // vitesse du tour de relevé du circuit (mm/s)
 
@@ -1547,26 +1547,25 @@ function curveNote(c, i, wheel, drift, score, now) {
   } else if (score < LEARN.stable && curveF(C, i) < 1.05) { C.f[i] = Math.min(1.05, curveF(C, i) + 0.01); cruiseSave(C); }
 }
 const ceilOf = (C, now) => C.ceil ? C.ceil * Math.pow(1.02, (now - C.ceilT) / 60000) : null;
-// Un virage s'est mal passé pour un bot : baisse immédiate et plafond
+// Convergence (v17, essai réel 20/11) : une sortie fixe la limite = croisière qui a échoué ; le bot se pose à margin ×
+// limite et n'en bouge plus, sauf un essai à +2 % tous les 8 tours propres. Seules les sorties comptent (k ≤ 0,92).
 function cruiseHit(c, v, k, why) {
-  if (!c.bot || c.bot.sweep || !BOTS.on || !CIR.map) return;
-  if (c.lapBad && k > 0.92) return;                              // une seule baisse par tour pour une glissade
-  const C = cruiseOf(c.bot), now = performance.now(), before = C.v, h = ceilOf(C, now);
-  C.ceil = Math.round(Math.min(h === null ? Infinity : h, v * (k < 0.92 ? 0.95 : 0.98))); C.ceilT = now;
-  C.v = Math.max(400, Math.round(Math.min(C.v, v) * k)); c.lapBad = true; cruiseSave(C);
-  log(c.label, 'CROISIÈRE ' + why + ' à ' + Math.round(v) + ' mm/s : ' + before + ' → ' + C.v + ' mm/s (plafond ' + C.ceil + ')');
+  if (!c.bot || c.bot.sweep || !BOTS.on || !CIR.map || k > 0.92 || c.lapBad) return;
+  const L = c.bot, C = cruiseOf(L), failed = C.v;
+  C.ceil = failed; C.ceilT = performance.now(); C.v = Math.round((L.margin || 0.9) * failed); C.clean = 0; c.lapBad = true; cruiseSave(C);
+  log(c.label, 'CROISIÈRE ' + why + ' à ' + failed + ' de croisière → limite ' + C.ceil + ', posé à ' + C.v + ' mm/s');
 }
-// Fin de tour d'un bot : hausse si le tour était propre
+// Fin de tour d'un bot : montée tant qu'aucune limite n'est connue, puis approche de margin × limite, puis essais rares
 function cruiseLap(c) {
   if (!c.bot || c.bot.sweep || !BOTS.on || !CIR.map || c.rec) return;
-  const L = c.bot, C = cruiseOf(L), now = performance.now(), h = ceilOf(C, now);
-  if (c.lapBad || c.lapEdge) { c.lapBad = false; c.lapEdge = false; return; }
-  const sk = skill(), before = C.v;
-  let step = L.up * sk * (h === null ? 2 : clamp((h - C.v) / (0.08 * h), 0.1, 1));
-  let v = C.v * (1 + step);
-  if (h !== null) v = Math.min(v, h * L.cap);
-  if (satTop(c)) v = Math.min(v, satTop(c) * (L.top || 1));    // pas au-delà de ce que la voiture peut tenir
-  if (v > C.v) { C.v = Math.round(v); cruiseSave(C); log(c.label, 'CROISIÈRE tour propre : ' + before + ' → ' + C.v + ' mm/s'); }
+  const L = c.bot, C = cruiseOf(L), m = L.margin || 0.9, before = C.v;
+  if (c.lapBad) { c.lapBad = false; c.lapEdge = false; return; }
+  C.clean = (C.clean || 0) + 1;
+  if (!C.ceil) C.v = Math.round(C.v * (1 + 2 * L.up * skill()));
+  else if (C.v < m * C.ceil) C.v = Math.round(Math.min(m * C.ceil, C.v * (1 + L.up * skill())));
+  else if (C.clean >= 8 && L.up > 0) { C.ceil = Math.round(C.ceil * 1.02); C.v = Math.round(m * C.ceil); C.clean = 0; }
+  if (satTop(c)) C.v = Math.min(C.v, Math.round(satTop(c) * (L.top || 1)));
+  if (C.v !== before) { cruiseSave(C); log(c.label, 'CROISIÈRE ' + before + ' → ' + C.v + ' mm/s' + (C.ceil ? ' (limite ' + C.ceil + ')' : '')); }
 }
 // Consigne : croisière en virage, une seule montée en ligne droite si elle est assez longue
 function simplePlan(c, L, now, pos) {
