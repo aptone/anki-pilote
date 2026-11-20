@@ -209,7 +209,7 @@
 </div>
 
 <footer>
-  Clavier (voiture sélectionnée) : <kbd>↑</kbd><kbd>↓</kbd> vitesse · <kbd>←</kbd><kbd>→</kbd> voie · <kbd>Espace</kbd> stop · <kbd>U</kbd> demi-tour · <kbd>1</kbd>…<kbd>9</kbd> choisir la voiture · <kbd>Échap</kbd> arrêt général.<br>Manette (une par voiture, choix sur la carte) : <kbd>stick droit ↑</kbd> vitesse · <kbd>stick droit ↓</kbd> ou <kbd>ZL</kbd> frein · <kbd>ZR</kbd> boost · <kbd>stick gauche</kbd> voie · <kbd>L</kbd> demi-tour · <kbd>bouton du bas</kbd> stop.<br>Bots : choisir « Bot débutant / moyen / expert » ou « Voiture balai » dans le menu d'une carte, puis « Lancer les bots ». Avec un tracé relevé, les bots apprennent la vitesse sûre de chaque pièce et voie dès les premiers tours, cherchent la limite de chaque virage (essais de plus en plus rapides, puis dichotomie entre vitesse tenue et vitesse de glissade), ont leur propre plage de vitesse, d'accélération et de freinage (indépendante des réglages manuels), mesurent le freinage réel de chaque voiture et ralentissent dès le tour suivant une glissade (zones orange/rouges sur l'écran circuit). « Niveau bots » règle la capacité de pilotage de tous les bots.
+  Clavier (voiture sélectionnée) : <kbd>↑</kbd><kbd>↓</kbd> vitesse · <kbd>←</kbd><kbd>→</kbd> voie · <kbd>Espace</kbd> stop · <kbd>U</kbd> demi-tour · <kbd>1</kbd>…<kbd>9</kbd> choisir la voiture · <kbd>Échap</kbd> arrêt général.<br>Manette (une par voiture, choix sur la carte) : <kbd>stick droit ↑</kbd> vitesse · <kbd>stick droit ↓</kbd> ou <kbd>ZL</kbd> frein · <kbd>ZR</kbd> boost · <kbd>stick gauche</kbd> voie · <kbd>L</kbd> demi-tour · <kbd>bouton du bas</kbd> stop.<br>Bots : choisir « Bot débutant / moyen / expert » ou « Voiture balai » dans le menu d'une carte, puis « Lancer les bots ». Avec un tracé relevé, les bots roulent à une vitesse de croisière unique en virage, qui monte à chaque tour propre et baisse dès une glissade, avec une accélération en ligne droite quand elle est assez longue ; leurs vitesses et rampes ne dépendent pas des réglages manuels (zones orange/rouges sur l'écran circuit). « Niveau bots » règle la capacité de pilotage de tous les bots.
   <details><summary>Journal BLE</summary><button id="copyLog" style="margin-top:8px">Copier le journal</button><div id="log"></div></details>
 </footer>
 
@@ -251,19 +251,23 @@ const PIECE_KIND = { 33: 'Dép', 34: 'Arr', 10: 'X', 17: 'V', 18: 'V', 20: 'V', 
 // notée se relâche (+4 % par minute) pour suivre l'état de la piste.
 // « Niveau bots » (réglage) multiplie frac, climb, top, acc et dec pour tous les bots.
 // Sans tracé : ancien comportement (part s de V max en ligne droite, part c de CURVE0 en virage).
-// Plage propre aux bots, indépendante des réglages manuels V max / Accél. / Décél. / Frein / Boost :
-// top = part de BOT.vmax visée en ligne droite, acc / dec = rampes envoyées (mm/s²). Le freinage est planifié sur la
-// décélération réellement obtenue (mesurée sur chaque voiture), × brake : < 1 marge, > 1 freine trop tard (débutant).
-const BOT = { vmax: 3500, acc: 5000, dec: 6000 };
+// Pilotage des bots (v12), volontairement simple : une vitesse de croisière unique pour tous les virages, apprise par
+// niveau et par circuit, et en ligne droite une seule montée vers croisière × (1 + sb) si la ligne droite est assez longue,
+// avec retour à la croisière avant le virage suivant. Deux niveaux de vitesse seulement, rampes modérées.
+// Croisière : départ cruise0 ; chaque tour sans signe de glissade +up (×2 tant qu'aucune limite n'est connue) ; LIMITE
+// dans un virage : pas de hausse ce tour ; GLISSE : −5 % tout de suite ; sortie : −10 %. Plafond = vitesse de la dernière
+// glissade ou sortie, approché à pas décroissants, relâché de 2 % par minute. Indépendant de V max / Accél. / Décél.
+// mistake : probabilité d'entrer dans un virage 12 % trop vite (débutant). « Niveau bots » multiplie up, sb et le départ.
+const BOT = { vmax: 3500 };
 const BOT_LEVELS = [
-  { name: 'Bot débutant', s: 0.6, c: 0.8, frac: 0.8, top: 0.55, acc: 0.45, dec: 0.5, brake: 1.15, lat: 300, antic: 0.6, noise: 0.08, mistake: 0.08, lane: 'random', overtake: 0.15, climb: 0 },
-  { name: 'Bot moyen', s: 0.8, c: 0.9, frac: 0.92, top: 0.8, acc: 0.7, dec: 0.75, brake: 0.85, lat: 150, antic: 0.9, noise: 0.03, mistake: 0.03, lane: 'smart', overtake: 0.5, climb: 0.08 },
-  { name: 'Bot expert', s: 1.0, c: 1.0, frac: 1.0, top: 1, acc: 1, dec: 1, brake: 0.92, lat: 50, antic: 1, noise: 0.01, mistake: 0, lane: 'best', overtake: 0.9, climb: 0.15 },
+  { name: 'Bot débutant', s: 0.6, c: 0.8, cruise0: 650, sb: 0.15, up: 0.006, rampUp: 1500, rampDn: 2000, cap: 0.85, lat: 300, noise: 0.05, mistake: 0.06, lane: 'random', overtake: 0.15 },
+  { name: 'Bot moyen', s: 0.8, c: 0.9, cruise0: 750, sb: 0.3, up: 0.025, rampUp: 2000, rampDn: 2500, cap: 0.94, lat: 150, noise: 0.02, mistake: 0.02, lane: 'smart', overtake: 0.5 },
+  { name: 'Bot expert', s: 1.0, c: 1.0, cruise0: 850, sb: 0.45, up: 0.04, rampUp: 2500, rampDn: 3000, cap: 0.98, lat: 50, noise: 0, mistake: 0, lane: 'best', overtake: 0.9 },
   { name: 'Voiture balai', sweep: true },
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
-const VERSION = 'v11 · 19/11 22:30';
+const VERSION = 'v12 · 20/11 14:45';
 const PALETTE = ['#ff7a1a', '#3ecf8e', '#4da3ff', '#ff5468', '#c77dff', '#ffd23f', '#00d4d4', '#ff8fd0'];
 const SCAN_SPEED = 500;       // vitesse du tour de relevé du circuit (mm/s)
 
@@ -620,6 +624,8 @@ class Car {
         this.lastLap = t;
         onLap(this, this.seg.slice(-this.cur.length));
         this.botJit = 0.95 + Math.random() * 0.1;     // légère variation d'un tour à l'autre
+        cruiseLap(this);
+        this.lapJit = this.bot && this.bot.noise ? 1 + this.bot.noise * (2 * Math.random() - 1) : 1;
         this.lapStart = now; this.cur = []; this.crossings = 0;
       }
     }
@@ -1070,7 +1076,7 @@ function setBots(on) {
   BOTS.on = on;
   $('#bots').textContent = on ? 'Arrêter les bots' : 'Lancer les bots';
   $('#bots').classList.toggle('primary', on);
-  for (const c of cars) { c.rec = null; c.band = null; c.botT = 0; c.follow = null; c.brakeFor = null; c.noise = {}; }
+  for (const c of cars) { c.rec = null; c.band = null; c.botT = 0; c.follow = null; c.brakeFor = null; c.noise = {}; c.lapBad = false; c.lapEdge = false; c.relT = 0; }
   if (!on) for (const c of cars) { c.laneHold = false; if (c.bot) c.kSpeed = 0; }
   if (on) for (const c of cars) if (c.bot && c.bot.sweep) {
     c.sw = { base: null, phase: -1, done: false, measured: false }; c.codeOff = null; c.biasOK = false;   // le camion a pu être déplacé à la main
@@ -1173,7 +1179,7 @@ function runBotMapped(c, pos, now) {
   if (c.band === null) c.band = bandOf(latNow(c) * c.mdir);
   if (now >= c.botT) {
     c.botT = now + Math.max(L.lat, 100);
-    let v = planSpeed(c, L, now).v;
+    let v = simplePlan(c, L, now, pos);
     const straight = !isCurve(pos.i);
     // Prochain virage : c'est là que la voie compte
     let nc = null; for (let k = 1, j = pos.i; k < N; k++) { j = mod(j + c.mdir, N); if (isCurve(j)) { nc = j; break; } }
@@ -1209,7 +1215,7 @@ function runBotMapped(c, pos, now) {
     }
     c.botCmd = v;
   }
-  c.kSpeed = c.silent ? Math.min(c.botCmd, 600) : c.botCmd;      // plus de nouvelles : prudence
+  c.kSpeed = c.silent ? Math.min(c.botCmd, Math.max(500, 0.8 * cruiseOf(L).v)) : c.botCmd;   // plus de nouvelles : prudence
   c.kOffset = BANDS[c.band] * c.mdir;
 }
 // Sortie de piste d'un bot : arrêt, redémarrage lent sans changement de voie jusqu'à une nouvelle lecture, puis reprise.
@@ -1508,7 +1514,61 @@ function attemptV(j, band, L, now, sk) {
   return Math.min(up, lo + 0.5 * (hi - lo));
 }
 const botTop = L => BOT.vmax * Math.min(1, (L.top || 1) * skill());
-const botRamp = (L, up) => Math.round((up ? BOT.acc * (L.acc || 1) : BOT.dec * (L.dec || 1)) * Math.min(1.2, skill()));
+const botRamp = (L, up) => up ? L.rampUp : L.rampDn;
+// Croisière apprise, par circuit et par niveau
+const CRUISE = {};
+function cruiseOf(L) {
+  const k = gripKey(CIR.map) + '/' + BOT_LEVELS.indexOf(L);
+  if (!CRUISE[k]) {
+    let d = null; try { d = JSON.parse(store.get('anki-cruise-' + k) || 'null'); } catch (e) { /* illisible */ }
+    CRUISE[k] = d && d.v > 0 ? d : { v: Math.round(L.cruise0 * Math.min(1.15, skill())), ceil: null, ceilT: 0 };
+    CRUISE[k].k = k;
+  }
+  return CRUISE[k];
+}
+function cruiseSave(C) { store.set('anki-cruise-' + C.k, JSON.stringify({ v: C.v, ceil: C.ceil, ceilT: C.ceilT })); }
+const ceilOf = (C, now) => C.ceil ? C.ceil * Math.pow(1.02, (now - C.ceilT) / 60000) : null;
+// Un virage s'est mal passé pour un bot : baisse immédiate et plafond
+function cruiseHit(c, v, k, why) {
+  if (!c.bot || c.bot.sweep || !BOTS.on || !CIR.map) return;
+  const C = cruiseOf(c.bot), now = performance.now(), before = C.v, h = ceilOf(C, now);
+  C.ceil = Math.round(Math.min(h === null ? Infinity : h, v * (k < 0.92 ? 0.95 : 0.98))); C.ceilT = now;
+  C.v = Math.max(400, Math.round(Math.min(C.v, v) * k)); c.lapBad = true; cruiseSave(C);
+  log(c.label, 'CROISIÈRE ' + why + ' à ' + Math.round(v) + ' mm/s : ' + before + ' → ' + C.v + ' mm/s (plafond ' + C.ceil + ')');
+}
+// Fin de tour d'un bot : hausse si le tour était propre
+function cruiseLap(c) {
+  if (!c.bot || c.bot.sweep || !BOTS.on || !CIR.map || c.rec) return;
+  const L = c.bot, C = cruiseOf(L), now = performance.now(), h = ceilOf(C, now);
+  if (c.lapBad || c.lapEdge) { c.lapBad = false; c.lapEdge = false; return; }
+  const sk = skill(), before = C.v;
+  let step = L.up * sk * (h === null ? 2 : clamp((h - C.v) / (0.08 * h), 0.1, 1));
+  let v = C.v * (1 + step);
+  if (h !== null) v = Math.min(v, h * L.cap);
+  if (v > C.v) { C.v = Math.round(v); cruiseSave(C); log(c.label, 'CROISIÈRE tour propre : ' + before + ' → ' + C.v + ' mm/s'); }
+}
+// Consigne : croisière en virage, une seule montée en ligne droite si elle est assez longue
+function simplePlan(c, L, now, pos) {
+  const G = CIR.geo.segs, N = G.length, C = cruiseOf(L), sk = skill();
+  const curveV = C.v * carF(c) * (c.lapJit || 1);
+  if (isCurve(pos.i)) {
+    if (c.mistakeI !== pos.i) { c.mistakeI = pos.i; c.mistakeF = Math.random() < L.mistake ? 1.12 : 1; }
+    return Math.round(curveV * c.mistakeF);
+  }
+  // Ligne droite : longueur totale et distance restante jusqu'au prochain virage
+  let rem = G[pos.i].len - pos.into, run = G[pos.i].len, j = pos.i;
+  for (let k = 0; k < N; k++) { j = mod(j + c.mdir, N); if (isCurve(j)) break; rem += G[j].len; run += G[j].len; }
+  j = pos.i; for (let k = 0; k < N; k++) { j = mod(j - c.mdir, N); if (isCurve(j)) break; run += G[j].len; }
+  const aU = L.rampUp * 0.8, aD = L.rampDn * 0.7;                // marge : la voiture n'atteint pas toujours la rampe
+  const nextV = curveV;                                          // retour à la croisière (le virage suivant est au même régime)
+  let vb = Math.min(curveV * (1 + L.sb * sk), BOT.vmax, Math.sqrt(curveV * curveV + 0.7 * run * 2 * aU * aD / (aU + aD)));
+  if (vb < curveV * 1.05) return Math.round(curveV);             // ligne droite trop courte : on garde la croisière
+  const vNow = Math.max(c.est, c.lastSpd || 0);
+  const brakeD = (vNow * vNow - nextV * nextV) / (2 * aD) + vNow * ((L.lat + 150) / 1000);
+  if (c.relT && now - c.relT < 1500 && c.relI === pos.i) return Math.round(nextV);   // une fois relâché, pas de remise des gaz
+  if (vNow > nextV * 1.03 && rem <= brakeD) { c.relT = now; c.relI = pos.i; return Math.round(nextV); }
+  return Math.round(vb);
+}
 // Décélération obtenue / rampe demandée, mesurée par voiture (positions reçues pendant un ralentissement)
 const brkEff = c => c.brkEff || 0.7;
 const ema = (a, x, k) => a === null || a === undefined ? x : a + k * (x - a);
@@ -1540,6 +1600,7 @@ function gripSave(force) {
   for (const id in GRIP.carF) store.set('anki-cf-' + id, String(GRIP.carF[id]));
 }
 function gripReset() {
+  for (const k in CRUISE) { store.set('anki-cruise-' + k, ''); delete CRUISE[k]; }
   GRIP.key = ''; GRIP.carF = {}; store.set('anki-grip', '');
   cars.forEach(c => store.set('anki-cf-' + carId(c), ''));
   gripLoad(); log('CONDUITE', 'apprentissage effacé');
@@ -1680,8 +1741,10 @@ function passDone(c, i, p, wl, wr, drift, now) {
     // Glissade : correction dès ce passage, visible au tour suivant
     e.calm = now + 15000;                                        // plus d'essai au-dessus ici pendant 15 s
     { const h = hiOf(e, now); e.hi = Math.round(Math.min(h === null ? Infinity : h, vObs)); e.hiT = now; }
+    if (isCurve(i)) cruiseHit(c, vObs, 0.95, 'glissade pièce ' + (i + 1));
     blame(c, i, b, e, vObs, LEARN.down, now, 'GLISSE ' + tag + ' à ' + Math.round(vObs) + ' mm/s : score ' + score.toFixed(1) + detail);
   } else if (score >= LEARN.edge) {
+    if (isCurve(i)) c.lapEdge = true;                           // croisière : pas de hausse ce tour
     // À la limite : on se cale un peu en dessous de ce passage, sans attendre la glissade
     const h = hiOf(e, now); e.hi = Math.round(Math.min(h === null ? Infinity : h, vObs)); e.hiT = now;
     e.calm = now + 8000;
@@ -1730,7 +1793,10 @@ function blame(c, i, b, e, vObs, k, now, why) {
 }
 function onDeloc(c) {
   const now = performance.now(), pos = estPos(c);
-  if (c.bot && !c.bot.sweep && BOTS.on) c.rec = { t: now };
+  if (c.bot && !c.bot.sweep && BOTS.on) {
+    cruiseHit(c, Math.max(c.lastSpd || 0, Math.min(c.est, c.sentSpeed)), 0.9, 'sortie');
+    c.rec = { t: now };
+  }
   if (!pos) return;
   const b = bandOf(latNow(c) * c.mdir), e = cellOf(pos.i, b);
   if (!e) return;
@@ -1757,7 +1823,7 @@ function supervise() {
   const now = performance.now();
   for (const c of cars) {
     if (!c.connected) { c.silent = false; continue; }
-    const s = c.sentSpeed > 250 && c.lastMsgT && now - c.lastMsgT > 1500;
+    const s = c.sentSpeed > 250 && c.lastMsgT && now - c.lastMsgT > 3000;
     if (s && !c.silent) log(c.label, 'SUPERVISION aucune nouvelle de la voiture depuis ' + ((now - c.lastMsgT) / 1000).toFixed(1) + ' s');
     c.silent = s;
     // Aide au pilotage des humains : même plafond que les bots (vitesse sûre de la pièce, freinage anticipé)
