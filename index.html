@@ -260,19 +260,19 @@ const PIECE_KIND = { 33: 'Dép', 34: 'Arr', 10: 'X', 17: 'V', 18: 'V', 20: 'V', 
 // mistake : probabilité d'entrer dans un virage 12 % trop vite (débutant). « Niveau bots » multiplie up, sb et le départ.
 // top : croisière plafonnée à cette part de la vitesse max mesurée de la voiture (essai réel 20/11 : expert bien à
 // ~1650 pour 1945 max), dès que la voiture a montré sa vitesse max (consigne 10 % au-dessus de la vitesse atteinte).
-// Par virage, un facteur propre (f) baisse de 12 % à chaque sortie dans ce virage. Après une sortie, alerte : pas
+// Par virage, un facteur propre (f) baisse de 10 % à chaque sortie, appliqué au virage d'entrée de la série. Après une sortie, alerte : pas
 // d'accélération en ligne droite et −8 % sur les trois virages suivants. v15 : glissades (dérive, roues) ignorées par
 // les bots, mesure jugée peu fiable sur la piste réelle (voie mal connue) ; seules les sorties font baisser la croisière.
 const BOT = { vmax: 3500 };
 const BOT_LEVELS = [
-  { name: 'Bot débutant', s: 0.6, c: 0.8, cruise0: 650, sb: 0.15, up: 0.006, rampUp: 1500, rampDn: 2000, cap: 0.85, top: 0.7, lat: 300, noise: 0.05, mistake: 0.06, lane: 'random', overtake: 0.15 },
-  { name: 'Bot moyen', s: 0.8, c: 0.9, cruise0: 800, sb: 0.3, up: 0.04, rampUp: 2000, rampDn: 2500, cap: 0.94, top: 0.8, lat: 150, noise: 0.02, mistake: 0.02, lane: 'smart', overtake: 0.5 },
-  { name: 'Bot expert', s: 1.0, c: 1.0, cruise0: 900, sb: 0.45, up: 0.06, rampUp: 2500, rampDn: 3000, cap: 0.98, top: 0.88, lat: 50, noise: 0, mistake: 0, lane: 'best', overtake: 0.9 },
+  { name: 'Bot débutant', s: 0.6, c: 0.8, cruise0: 650, sb: 0.06, up: 0.006, rampUp: 1500, rampDn: 2000, cap: 0.85, top: 0.7, lat: 300, noise: 0.05, mistake: 0.06, lane: 'random', overtake: 0.15 },
+  { name: 'Bot moyen', s: 0.8, c: 0.9, cruise0: 800, sb: 0.1, up: 0.04, rampUp: 2000, rampDn: 2500, cap: 0.94, top: 0.8, lat: 150, noise: 0.02, mistake: 0.02, lane: 'smart', overtake: 0.5 },
+  { name: 'Bot expert', s: 1.0, c: 1.0, cruise0: 900, sb: 0.12, up: 0.06, rampUp: 2500, rampDn: 3000, cap: 0.98, top: 0.88, lat: 50, noise: 0, mistake: 0, lane: 'best', overtake: 0.9 },
   { name: 'Voiture balai', sweep: true },
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
-const VERSION = 'v15 · 20/11 15:20';
+const VERSION = 'v16 · 20/11 15:25';
 const PALETTE = ['#ff7a1a', '#3ecf8e', '#4da3ff', '#ff5468', '#c77dff', '#ffd23f', '#00d4d4', '#ff8fd0'];
 const SCAN_SPEED = 500;       // vitesse du tour de relevé du circuit (mm/s)
 
@@ -1825,7 +1825,13 @@ function onDeloc(c) {
   const now = performance.now(), pos = estPos(c);
   if (c.bot && !c.bot.sweep && BOTS.on) {
     cruiseHit(c, Math.max(c.lastSpd || 0, Math.min(c.est, c.sentSpeed)), 0.9, 'sortie');
-    if (pos && CIR.map && isCurve(pos.i)) { const C = cruiseOf(c.bot); C.f[pos.i] = Math.max(0.7, curveF(C, pos.i) * 0.88); cruiseSave(C); }
+    if (pos && CIR.map) {
+      const N = CIR.map.segs.length; let j = pos.i;
+      if (!isCurve(j)) j = mod(j + c.mdir, N);                   // estimée encore en ligne droite : virage suivant
+      for (let k = 0; k < N && isCurve(mod(j - c.mdir, N)); k++) j = mod(j - c.mdir, N);   // entrée de la série
+      if (isCurve(j)) { const C = cruiseOf(c.bot); C.f[j] = Math.max(0.7, curveF(C, j) * 0.9); cruiseSave(C);
+        log(c.label, 'CROISIÈRE entrée de virage pièce ' + (j + 1) + ' (' + CIR.map.segs[j].id + ') ralentie à ' + Math.round(C.f[j] * 100) + ' %'); }
+    }
     c.alert = { until: now + 6000, n: 3 };
     c.rec = { t: now };
   }
