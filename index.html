@@ -265,14 +265,14 @@ const PIECE_KIND = { 33: 'Dép', 34: 'Arr', 10: 'X', 17: 'V', 18: 'V', 20: 'V', 
 // les bots, mesure jugée peu fiable sur la piste réelle (voie mal connue) ; seules les sorties font baisser la croisière.
 const BOT = { vmax: 3500 };
 const BOT_LEVELS = [
-  { name: 'Bot débutant', s: 0.6, c: 0.8, cruise0: 650, sb: 0.06, up: 0.006, rampUp: 1500, rampDn: 2000, cap: 0.85, margin: 0.85, top: 0.7, lat: 300, noise: 0.05, mistake: 0.06, lane: 'random', overtake: 0.15 },
-  { name: 'Bot moyen', s: 0.8, c: 0.9, cruise0: 800, sb: 0.1, up: 0.04, rampUp: 2000, rampDn: 2500, cap: 0.94, margin: 0.9, top: 0.8, lat: 150, noise: 0.02, mistake: 0.02, lane: 'smart', overtake: 0.5 },
-  { name: 'Bot expert', s: 1.0, c: 1.0, cruise0: 900, sb: 0.12, up: 0.06, rampUp: 2500, rampDn: 3000, cap: 0.98, margin: 0.95, top: 0.88, lat: 50, noise: 0, mistake: 0, lane: 'best', overtake: 0.9 },
+  { name: 'Bot débutant', s: 0.6, c: 0.8, cruise0: 650, sb: 0.06, up: 0.006, rampUp: 1500, rampDn: 2000, cap: 0.85, margin: 0.85, top: 0.7, gas: 0.6, tStep: 15, tMargin: 220, lat: 300, noise: 0.05, mistake: 0.06, lane: 'random', overtake: 0.15 },
+  { name: 'Bot moyen', s: 0.8, c: 0.9, cruise0: 800, sb: 0.1, up: 0.04, rampUp: 2000, rampDn: 2500, cap: 0.94, margin: 0.9, top: 0.8, gas: 0.8, tStep: 20, tMargin: 140, lat: 150, noise: 0.02, mistake: 0.02, lane: 'smart', overtake: 0.5 },
+  { name: 'Bot expert', s: 1.0, c: 1.0, cruise0: 900, sb: 0.12, up: 0.06, rampUp: 2500, rampDn: 3000, cap: 0.98, margin: 0.95, top: 0.88, gas: 1, tStep: 25, tMargin: 90, lat: 50, noise: 0, mistake: 0, lane: 'best', overtake: 0.9 },
   { name: 'Voiture balai', sweep: true },
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
-const VERSION = 'v18 · 20/11 15:35';
+const VERSION = 'v19 · 20/11 15:45';
 const PALETTE = ['#ff7a1a', '#3ecf8e', '#4da3ff', '#ff5468', '#c77dff', '#ffd23f', '#00d4d4', '#ff8fd0'];
 const SCAN_SPEED = 500;       // vitesse du tour de relevé du circuit (mm/s)
 
@@ -781,6 +781,7 @@ function bindRange(id, unit) {
   $('#' + id).addEventListener('change', e => store.set('anki-' + id, e.target.value));
 });
 { const v = store.get('anki-botSkill'); if (v !== null) $('#botSkill').value = v; $('#botSkill').addEventListener('change', e => store.set('anki-botSkill', e.target.value)); }
+{ const n = $('#nStart'), v = store.get('anki-nStart'); if (v) n.value = v; n.addEventListener('change', e => store.set('anki-nStart', e.target.value)); }
 bindRange('vmax', 'mm/s'); bindRange('acc', 'mm/s²'); bindRange('dec', 'mm/s²'); bindRange('brk', 'mm/s²'); bindRange('boost', '% en plus'); bindRange('botSkill', '%'); bindRange('swSpeed', 'mm/s'); bindRange('swLane', 'mm du centre'); bindRange('vmin', 'mm/s'); bindRange('thrTravel', '% de la zone'); bindRange('laneTravel', 'px'); bindRange('laneRate', 'mm/s à fond');
 { const lw = $('#laneTravel'), v = store.get('anki-laneW'); if (v !== null) { lw.value = v; lw.dispatchEvent(new Event('input')); }
   const up = () => { $('#rLane').style.setProperty('--laneW', lw.value + 'px'); store.set('anki-laneW', lw.value); }; lw.addEventListener('input', up); up(); }
@@ -1532,7 +1533,7 @@ function cruiseOf(L) {
   }
   return CRUISE[k];
 }
-function cruiseSave(C) { store.set('anki-cruise3-' + C.k, JSON.stringify({ v: C.v, ceil: C.ceil, ceilT: C.ceilT, f: C.f })); }
+function cruiseSave(C) { store.set('anki-cruise3-' + C.k, JSON.stringify({ v: C.v, ceil: C.ceil, ceilT: C.ceilT, f: C.f, rel: C.rel })); }
 const curveF = (C, i) => C.f[i] || 1;
 const satTop = c => (c.cmdMax || 0) >= 1.1 * (c.vtop || 0) && c.vtop >= 800 ? c.vtop : null;
 // Virage passé de justesse (warn) ou proprement, pour un bot : facteur du virage et alerte pour la suite du tour
@@ -1560,10 +1561,12 @@ function cruiseLap(c) {
   if (!c.bot || c.bot.sweep || !BOTS.on || !CIR.map || c.rec) return;
   const L = c.bot, C = cruiseOf(L), m = L.margin || 0.9, before = C.v;
   if (c.lapBad) { c.lapBad = false; c.lapEdge = false; return; }
+  straightLap(c);
   C.clean = (C.clean || 0) + 1;
   if (!C.ceil) C.v = Math.round(C.v * (1 + 2 * L.up * skill()));
   else if (C.v < m * C.ceil) C.v = Math.round(Math.min(m * C.ceil, C.v * (1 + L.up * skill())));
   else if (C.clean >= 8 && L.up > 0) { C.ceil = Math.round(C.ceil * 1.02); C.v = Math.round(m * C.ceil); C.clean = 0; }
+  C.v = Math.min(C.v, BOT.vmax);
   if (C.v !== before) { cruiseSave(C); log(c.label, 'CROISIÈRE ' + before + ' → ' + C.v + ' mm/s' + (C.ceil ? ' (limite ' + C.ceil + ')' : '')); }
 }
 // Consigne : croisière en virage, une seule montée en ligne droite si elle est assez longue
@@ -1580,19 +1583,56 @@ function simplePlan(c, L, now, pos) {
     }
     return Math.round(vCurve(pos.i) * c.mistakeF);
   }
-  // Ligne droite : longueur totale, distance restante et prochain virage
+  // Ligne droite au temps (v19) : pleins gaz depuis la transition d'entrée sur la ligne droite (repère exact, même à
+  // haute vitesse), relâchement à un instant appris pour cette ligne droite (ms après l'entrée), puis vitesse du virage.
   let rem = G[pos.i].len - pos.into, run = G[pos.i].len, j = pos.i;
   for (let k = 0; k < N; k++) { j = mod(j + c.mdir, N); if (isCurve(j)) break; rem += G[j].len; run += G[j].len; }
   const nextV = vCurve(j);                                       // vitesse du virage qui arrive
-  j = pos.i; for (let k = 0; k < N; k++) { j = mod(j - c.mdir, N); if (isCurve(j)) break; run += G[j].len; }
-  const aU = L.rampUp * 0.8, aD = L.rampDn * 0.7;
-  const base = Math.max(nextV, Math.min(c.est || 0, vCurve(mod(pos.i - c.mdir, N))));
-  let vb = al ? nextV : Math.min(top * carF(c) * (1 + L.sb * sk), BOT.vmax, Math.sqrt(base * base + 0.7 * run * 2 * aU * aD / (aU + aD)));
-  const vNow = Math.max(c.est, c.lastSpd || 0);
-  const brakeD = 1.2 * (vNow * vNow - nextV * nextV) / (2 * aD) + vNow * ((L.lat + 150) / 1000) + 150;
-  if (c.relT && now - c.relT < 1500 && c.relI === pos.i) return Math.round(nextV);   // une fois relâché, pas de remise des gaz
-  if (vNow > nextV * 1.03 && rem <= brakeD) { c.relT = now; c.relI = pos.i; return Math.round(nextV); }
-  return Math.round(Math.max(vb, nextV));
+  let jS = pos.i;
+  for (let k = 0; k < N && !isCurve(mod(jS - c.mdir, N)); k++) { jS = mod(jS - c.mdir, N); run += G[jS].len; }
+  if (c.curRun !== jS || !c.runT0 || now - c.runT0 > 5000) {    // nouvelle ligne droite : repère = transition d'entrée
+    c.curRun = jS; c.relDone = false;
+    c.runT0 = c.pass && c.pass.i === jS && c.pass.fromTr && now - c.pass.t0 < 1500 ? c.pass.t0 : now;
+  }
+  const r = relOf(C, L, jS, run, nextV), el = now - c.runT0;
+  if (al) return Math.round(nextV);                              // après une sortie : prudence
+  if (c.relDone || el >= r.t || rem < 100) {
+    if (!c.relDone) { c.relDone = true; c.relAt = now; c.relRun = jS; }
+    return Math.round(nextV);
+  }
+  return Math.round(Math.max(nextV, BOT.vmax * (L.gas || 1) * Math.min(1, sk)));
+}
+// Instant de relâchement appris pour la ligne droite commençant à la pièce jS (ms après la transition d'entrée)
+function relOf(C, L, jS, run, v0) {
+  C.rel = C.rel || {};
+  // Départ prudent : relâcher quand la voiture a gagné ~30 % sur la vitesse du virage (accélération réelle ~1500 mm/s²),
+  // sans dépasser le temps de parcours de 40 % de la ligne droite
+  if (!C.rel[jS]) C.rel[jS] = { t: Math.round(Math.min(0.3 * v0 / 1.5, 0.4 * run / Math.max(v0, 500) * 1000)), lim: null, clean: 0 };
+  return C.rel[jS];
+}
+// Sortie peu après un relâchement : c'est le timing de la ligne droite qui est en cause, pas la vitesse du virage
+function straightHit(c, now) {
+  if (!c.relAt || now - c.relAt > 1500 || c.relRun === undefined) return false;
+  const L = c.bot, C = cruiseOf(L), r = C.rel && C.rel[c.relRun];
+  if (!r) return false;
+  const before = r.t;
+  r.lim = r.t; r.t = Math.max(0, r.t - (L.tMargin || 80)); r.clean = 0; c.lapBad = true; c.relAt = 0; cruiseSave(C);
+  log(c.label, 'TIMING ligne droite pièce ' + (c.relRun + 1) + ' : sortie après relâchement à ' + before + ' ms → limite ' + r.lim + ' ms, posé à ' + r.t + ' ms');
+  return true;
+}
+// Tour propre : chaque ligne droite relâche un peu plus tard, jusqu'à la limite connue moins la marge, puis essais rares
+function straightLap(c) {
+  const L = c.bot, C = cruiseOf(L);
+  if (!C.rel) return;
+  for (const k in C.rel) {
+    const r = C.rel[k], m = L.tMargin || 80, before = r.t;
+    r.clean = (r.clean || 0) + 1;
+    if (r.lim === null) r.t += L.tStep;
+    else if (r.t < r.lim - m) r.t = Math.min(r.lim - m, r.t + L.tStep);
+    else if (r.clean >= 8) { r.lim += 15; r.t = r.lim - m; r.clean = 0; }
+    if (r.t !== before) log(c.label, 'TIMING ligne droite pièce ' + (Number(k) + 1) + ' : relâchement ' + before + ' → ' + r.t + ' ms' + (r.lim !== null ? ' (limite ' + r.lim + ')' : ''));
+  }
+  cruiseSave(C);
 }
 // Décélération obtenue / rampe demandée, mesurée par voiture (positions reçues pendant un ralentissement)
 const brkEff = c => c.brkEff || 0.7;
@@ -1821,8 +1861,9 @@ function blame(c, i, b, e, vObs, k, now, why) {
 function onDeloc(c) {
   const now = performance.now(), pos = estPos(c);
   if (c.bot && !c.bot.sweep && BOTS.on) {
-    cruiseHit(c, Math.max(c.lastSpd || 0, Math.min(c.est, c.sentSpeed)), 0.9, 'sortie');
-    if (pos && CIR.map) {
+    const timing = CIR.map && straightHit(c, now);
+    if (!timing) cruiseHit(c, Math.max(c.lastSpd || 0, Math.min(c.est, c.sentSpeed)), 0.9, 'sortie');
+    if (!timing && pos && CIR.map) {
       const N = CIR.map.segs.length; let j = pos.i;
       if (!isCurve(j)) j = mod(j + c.mdir, N);                   // estimée encore en ligne droite : virage suivant
       for (let k = 0; k < N && isCurve(mod(j - c.mdir, N)); k++) j = mod(j - c.mdir, N);   // entrée de la série
