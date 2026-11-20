@@ -259,9 +259,10 @@ const PIECE_KIND = { 33: 'Dép', 34: 'Arr', 10: 'X', 17: 'V', 18: 'V', 20: 'V', 
 // glissade ou sortie, approché à pas décroissants, relâché de 2 % par minute. Indépendant de V max / Accél. / Décél.
 // mistake : probabilité d'entrer dans un virage 12 % trop vite (débutant). « Niveau bots » multiplie up, sb et le départ.
 // top : croisière plafonnée à cette part de la vitesse max mesurée de la voiture (essai réel 20/11 : expert bien à
-// ~1650 pour 1945 max). Par virage, un facteur propre (f) baisse quand le virage passe de justesse ou en cas de sortie et
-// remonte doucement sur les passages propres. Alerte (virage passé de justesse) : pas d'accélération sur la ligne droite
-// suivante et −8 % sur les deux virages suivants, pendant 3 s au moins.
+// ~1650 pour 1945 max), dès que la voiture a montré sa vitesse max (consigne 10 % au-dessus de la vitesse atteinte).
+// Par virage, un facteur propre (f) baisse de 12 % à chaque sortie dans ce virage. Après une sortie, alerte : pas
+// d'accélération en ligne droite et −8 % sur les trois virages suivants. v15 : glissades (dérive, roues) ignorées par
+// les bots, mesure jugée peu fiable sur la piste réelle (voie mal connue) ; seules les sorties font baisser la croisière.
 const BOT = { vmax: 3500 };
 const BOT_LEVELS = [
   { name: 'Bot débutant', s: 0.6, c: 0.8, cruise0: 650, sb: 0.15, up: 0.006, rampUp: 1500, rampDn: 2000, cap: 0.85, top: 0.7, lat: 300, noise: 0.05, mistake: 0.06, lane: 'random', overtake: 0.15 },
@@ -271,7 +272,7 @@ const BOT_LEVELS = [
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
-const VERSION = 'v14 · 20/11 15:15';
+const VERSION = 'v15 · 20/11 15:20';
 const PALETTE = ['#ff7a1a', '#3ecf8e', '#4da3ff', '#ff5468', '#c77dff', '#ffd23f', '#00d4d4', '#ff8fd0'];
 const SCAN_SPEED = 500;       // vitesse du tour de relevé du circuit (mm/s)
 
@@ -1524,16 +1525,16 @@ const CRUISE = {};
 function cruiseOf(L) {
   const k = gripKey(CIR.map) + '/' + BOT_LEVELS.indexOf(L);
   if (!CRUISE[k]) {
-    let d = null; try { d = JSON.parse(store.get('anki-cruise2-' + k) || 'null'); } catch (e) { /* illisible */ }
+    let d = null; try { d = JSON.parse(store.get('anki-cruise3-' + k) || 'null'); } catch (e) { /* illisible */ }
     CRUISE[k] = d && d.v > 0 ? d : { v: Math.round(L.cruise0 * Math.min(1.15, skill())), ceil: null, ceilT: 0 };
     CRUISE[k].f = CRUISE[k].f || {};
     CRUISE[k].k = k;
   }
   return CRUISE[k];
 }
-function cruiseSave(C) { store.set('anki-cruise2-' + C.k, JSON.stringify({ v: C.v, ceil: C.ceil, ceilT: C.ceilT, f: C.f })); }
+function cruiseSave(C) { store.set('anki-cruise3-' + C.k, JSON.stringify({ v: C.v, ceil: C.ceil, ceilT: C.ceilT, f: C.f })); }
 const curveF = (C, i) => C.f[i] || 1;
-const satTop = c => (c.cmdMax || 0) >= 1.2 * (c.vtop || 0) && c.vtop >= 800 ? c.vtop : null;
+const satTop = c => (c.cmdMax || 0) >= 1.1 * (c.vtop || 0) && c.vtop >= 800 ? c.vtop : null;
 // Virage passé de justesse (warn) ou proprement, pour un bot : facteur du virage et alerte pour la suite du tour
 function curveNote(c, i, wheel, drift, score, now) {
   if (!c.bot || c.bot.sweep || !BOTS.on || !CIR.map || !isCurve(i)) return;
@@ -1627,7 +1628,7 @@ function gripSave(force) {
   for (const id in GRIP.carF) store.set('anki-cf-' + id, String(GRIP.carF[id]));
 }
 function gripReset() {
-  for (const k in CRUISE) { store.set('anki-cruise2-' + k, ''); delete CRUISE[k]; }
+  for (const k in CRUISE) { store.set('anki-cruise3-' + k, ''); delete CRUISE[k]; }
   GRIP.key = ''; GRIP.carF = {}; store.set('anki-grip', '');
   cars.forEach(c => store.set('anki-cf-' + carId(c), ''));
   gripLoad(); log('CONDUITE', 'apprentissage effacé');
@@ -1756,7 +1757,6 @@ function passDone(c, i, p, wl, wr, drift, now) {
     if (e.rn >= 5) e.rref = Math.max(e.rref || 0, e.rq);
   }
   if (!known) return;
-  curveNote(c, i, Math.max(parts.slip, parts.diff), parts.drift, score, now);
   const tag = 'pièce ' + (i + 1) + ' (' + CIR.map.segs[i].id + ') voie ' + (b + 1);
   const detail = ' (glissement ' + parts.slip.toFixed(1) + ', roues ' + parts.diff.toFixed(1) + ', dérive ' + parts.drift.toFixed(1) + ')';
   if ((score >= LEARN.unstable && vObs < 0.8 * vs) || (score >= LEARN.edge && score < LEARN.unstable && vObs < 0.9 * vs)
@@ -1771,10 +1771,10 @@ function passDone(c, i, p, wl, wr, drift, now) {
     { const h = hiOf(e, now); e.hi = Math.round(Math.min(h === null ? Infinity : h, vObs)); e.hiT = now; }
     // Croisière : seulement si les roues ont patiné ou divergé. La dérive caméra seule augmente avec la vitesse
     // (constat sur piste réelle, 20/11) : ce n'est pas une glissade.
-    if (isCurve(i) && Math.max(parts.slip, parts.diff) >= LEARN.unstable) cruiseHit(c, vObs, 0.95, 'glissade pièce ' + (i + 1));
+    // Bots : plus de baisse de croisière sur glissade. Essai réel 20/11 : la dérive caméra et l'écart des roues donnent
+    // de fausses alertes (voie mal connue, dérive qui croît avec la vitesse) ; seules les sorties de piste comptent.
     blame(c, i, b, e, vObs, LEARN.down, now, 'GLISSE ' + tag + ' à ' + Math.round(vObs) + ' mm/s : score ' + score.toFixed(1) + detail);
   } else if (score >= LEARN.edge) {
-    if (isCurve(i) && Math.max(parts.slip, parts.diff) >= LEARN.edge) c.lapEdge = true;   // croisière : pas de hausse ce tour
     // À la limite : on se cale un peu en dessous de ce passage, sans attendre la glissade
     const h = hiOf(e, now); e.hi = Math.round(Math.min(h === null ? Infinity : h, vObs)); e.hiT = now;
     e.calm = now + 8000;
