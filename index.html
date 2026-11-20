@@ -261,13 +261,13 @@ const PIECE_KIND = { 33: 'Dép', 34: 'Arr', 10: 'X', 17: 'V', 18: 'V', 20: 'V', 
 const BOT = { vmax: 3500 };
 const BOT_LEVELS = [
   { name: 'Bot débutant', s: 0.6, c: 0.8, cruise0: 650, sb: 0.15, up: 0.006, rampUp: 1500, rampDn: 2000, cap: 0.85, lat: 300, noise: 0.05, mistake: 0.06, lane: 'random', overtake: 0.15 },
-  { name: 'Bot moyen', s: 0.8, c: 0.9, cruise0: 750, sb: 0.3, up: 0.025, rampUp: 2000, rampDn: 2500, cap: 0.94, lat: 150, noise: 0.02, mistake: 0.02, lane: 'smart', overtake: 0.5 },
-  { name: 'Bot expert', s: 1.0, c: 1.0, cruise0: 850, sb: 0.45, up: 0.04, rampUp: 2500, rampDn: 3000, cap: 0.98, lat: 50, noise: 0, mistake: 0, lane: 'best', overtake: 0.9 },
+  { name: 'Bot moyen', s: 0.8, c: 0.9, cruise0: 800, sb: 0.3, up: 0.04, rampUp: 2000, rampDn: 2500, cap: 0.94, lat: 150, noise: 0.02, mistake: 0.02, lane: 'smart', overtake: 0.5 },
+  { name: 'Bot expert', s: 1.0, c: 1.0, cruise0: 900, sb: 0.45, up: 0.06, rampUp: 2500, rampDn: 3000, cap: 0.98, lat: 50, noise: 0, mistake: 0, lane: 'best', overtake: 0.9 },
   { name: 'Voiture balai', sweep: true },
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
-const VERSION = 'v12 · 20/11 14:45';
+const VERSION = 'v13 · 20/11 15:00';
 const PALETTE = ['#ff7a1a', '#3ecf8e', '#4da3ff', '#ff5468', '#c77dff', '#ffd23f', '#00d4d4', '#ff8fd0'];
 const SCAN_SPEED = 500;       // vitesse du tour de relevé du circuit (mm/s)
 
@@ -1520,17 +1520,18 @@ const CRUISE = {};
 function cruiseOf(L) {
   const k = gripKey(CIR.map) + '/' + BOT_LEVELS.indexOf(L);
   if (!CRUISE[k]) {
-    let d = null; try { d = JSON.parse(store.get('anki-cruise-' + k) || 'null'); } catch (e) { /* illisible */ }
+    let d = null; try { d = JSON.parse(store.get('anki-cruise2-' + k) || 'null'); } catch (e) { /* illisible */ }
     CRUISE[k] = d && d.v > 0 ? d : { v: Math.round(L.cruise0 * Math.min(1.15, skill())), ceil: null, ceilT: 0 };
     CRUISE[k].k = k;
   }
   return CRUISE[k];
 }
-function cruiseSave(C) { store.set('anki-cruise-' + C.k, JSON.stringify({ v: C.v, ceil: C.ceil, ceilT: C.ceilT })); }
+function cruiseSave(C) { store.set('anki-cruise2-' + C.k, JSON.stringify({ v: C.v, ceil: C.ceil, ceilT: C.ceilT })); }
 const ceilOf = (C, now) => C.ceil ? C.ceil * Math.pow(1.02, (now - C.ceilT) / 60000) : null;
 // Un virage s'est mal passé pour un bot : baisse immédiate et plafond
 function cruiseHit(c, v, k, why) {
   if (!c.bot || c.bot.sweep || !BOTS.on || !CIR.map) return;
+  if (c.lapBad && k > 0.92) return;                              // une seule baisse par tour pour une glissade
   const C = cruiseOf(c.bot), now = performance.now(), before = C.v, h = ceilOf(C, now);
   C.ceil = Math.round(Math.min(h === null ? Infinity : h, v * (k < 0.92 ? 0.95 : 0.98))); C.ceilT = now;
   C.v = Math.max(400, Math.round(Math.min(C.v, v) * k)); c.lapBad = true; cruiseSave(C);
@@ -1564,7 +1565,7 @@ function simplePlan(c, L, now, pos) {
   let vb = Math.min(curveV * (1 + L.sb * sk), BOT.vmax, Math.sqrt(curveV * curveV + 0.7 * run * 2 * aU * aD / (aU + aD)));
   if (vb < curveV * 1.05) return Math.round(curveV);             // ligne droite trop courte : on garde la croisière
   const vNow = Math.max(c.est, c.lastSpd || 0);
-  const brakeD = (vNow * vNow - nextV * nextV) / (2 * aD) + vNow * ((L.lat + 150) / 1000);
+  const brakeD = 1.2 * (vNow * vNow - nextV * nextV) / (2 * aD) + vNow * ((L.lat + 150) / 1000) + 150;
   if (c.relT && now - c.relT < 1500 && c.relI === pos.i) return Math.round(nextV);   // une fois relâché, pas de remise des gaz
   if (vNow > nextV * 1.03 && rem <= brakeD) { c.relT = now; c.relI = pos.i; return Math.round(nextV); }
   return Math.round(vb);
@@ -1600,7 +1601,7 @@ function gripSave(force) {
   for (const id in GRIP.carF) store.set('anki-cf-' + id, String(GRIP.carF[id]));
 }
 function gripReset() {
-  for (const k in CRUISE) { store.set('anki-cruise-' + k, ''); delete CRUISE[k]; }
+  for (const k in CRUISE) { store.set('anki-cruise2-' + k, ''); delete CRUISE[k]; }
   GRIP.key = ''; GRIP.carF = {}; store.set('anki-grip', '');
   cars.forEach(c => store.set('anki-cf-' + carId(c), ''));
   gripLoad(); log('CONDUITE', 'apprentissage effacé');
@@ -1741,10 +1742,12 @@ function passDone(c, i, p, wl, wr, drift, now) {
     // Glissade : correction dès ce passage, visible au tour suivant
     e.calm = now + 15000;                                        // plus d'essai au-dessus ici pendant 15 s
     { const h = hiOf(e, now); e.hi = Math.round(Math.min(h === null ? Infinity : h, vObs)); e.hiT = now; }
-    if (isCurve(i)) cruiseHit(c, vObs, 0.95, 'glissade pièce ' + (i + 1));
+    // Croisière : seulement si les roues ont patiné ou divergé. La dérive caméra seule augmente avec la vitesse
+    // (constat sur piste réelle, 20/11) : ce n'est pas une glissade.
+    if (isCurve(i) && Math.max(parts.slip, parts.diff) >= LEARN.unstable) cruiseHit(c, vObs, 0.95, 'glissade pièce ' + (i + 1));
     blame(c, i, b, e, vObs, LEARN.down, now, 'GLISSE ' + tag + ' à ' + Math.round(vObs) + ' mm/s : score ' + score.toFixed(1) + detail);
   } else if (score >= LEARN.edge) {
-    if (isCurve(i)) c.lapEdge = true;                           // croisière : pas de hausse ce tour
+    if (isCurve(i) && Math.max(parts.slip, parts.diff) >= LEARN.edge) c.lapEdge = true;   // croisière : pas de hausse ce tour
     // À la limite : on se cale un peu en dessous de ce passage, sans attendre la glissade
     const h = hiOf(e, now); e.hi = Math.round(Math.min(h === null ? Infinity : h, vObs)); e.hiT = now;
     e.calm = now + 8000;
