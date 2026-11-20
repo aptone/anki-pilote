@@ -272,7 +272,7 @@ const BOT_LEVELS = [
 ];
 const BOT_LANES = [-51, -17, 17, 51];
 const TICK_MS = 50;           // cadence d'envoi des consignes
-const VERSION = 'v17 · 20/11 15:30';
+const VERSION = 'v18 · 20/11 15:35';
 const PALETTE = ['#ff7a1a', '#3ecf8e', '#4da3ff', '#ff5468', '#c77dff', '#ffd23f', '#00d4d4', '#ff8fd0'];
 const SCAN_SPEED = 500;       // vitesse du tour de relevé du circuit (mm/s)
 
@@ -1564,14 +1564,12 @@ function cruiseLap(c) {
   if (!C.ceil) C.v = Math.round(C.v * (1 + 2 * L.up * skill()));
   else if (C.v < m * C.ceil) C.v = Math.round(Math.min(m * C.ceil, C.v * (1 + L.up * skill())));
   else if (C.clean >= 8 && L.up > 0) { C.ceil = Math.round(C.ceil * 1.02); C.v = Math.round(m * C.ceil); C.clean = 0; }
-  if (satTop(c)) C.v = Math.min(C.v, Math.round(satTop(c) * (L.top || 1)));
   if (C.v !== before) { cruiseSave(C); log(c.label, 'CROISIÈRE ' + before + ' → ' + C.v + ' mm/s' + (C.ceil ? ' (limite ' + C.ceil + ')' : '')); }
 }
 // Consigne : croisière en virage, une seule montée en ligne droite si elle est assez longue
 function simplePlan(c, L, now, pos) {
   const G = CIR.geo.segs, N = G.length, C = cruiseOf(L), sk = skill();
   let top = C.v;
-  if (satTop(c)) top = Math.min(top, satTop(c) * (L.top || 1));
   const al = c.alert && (now < c.alert.until || c.alert.n > 0) ? c.alert : null;
   if (c.alert && !al) c.alert = null;
   const vCurve = j => top * carF(c) * (c.lapJit || 1) * curveF(C, j) * (al ? 0.92 : 1);
